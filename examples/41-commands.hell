@@ -29,7 +29,8 @@ cmdParser =
     )
 
 main = do
-  let opts = Options.info (Main.cmdParser <**> Options.helper) Options.fullDesc
+  let opts = Options.info (Main.cmdParser <**> Options.helper)
+       (Options.fullDesc <> Options.header "Program is distributed AS IS, without ANY warranty claims")
   cmd <- Options.execParser opts
   case cmd of
     Add f    -> Text.putStrLn $ "Adding " <> f
