@@ -1876,6 +1876,11 @@ supportedLits =
       lit' "Directory.removeFile" (\x -> Dir.removeFile (Text.unpack x)),
       lit' "Directory.doesFileExist" (\x -> Dir.doesFileExist (Text.unpack x)),
       lit' "Directory.doesDirectoryExist" (\x -> Dir.doesDirectoryExist (Text.unpack x)),
+      lit' "Directory.getHomeDirectory" (fmap Text.pack Dir.getHomeDirectory),
+      lit' "Directory.getFileSize" (\x -> Dir.getFileSize (Text.unpack x)),
+      lit' "Directory.pathIsSymbolicLink" (\x -> Dir.pathIsSymbolicLink (Text.unpack x)),
+      lit' "Directory.getSymbolicLinkTarget" (\x -> fmap Text.pack $ Dir.getSymbolicLinkTarget (Text.unpack x)),
+      lit' "Directory.removeDirectory" (\x -> Dir.removeDirectory (Text.unpack x)),
       -- Process
       lit' "Process.proc" $ \n xs -> proc (Text.unpack n) (map Text.unpack xs),
       lit' "Process.setEnv" $ Process.setEnv @() @() @() . map (bimap Text.unpack Text.unpack),
