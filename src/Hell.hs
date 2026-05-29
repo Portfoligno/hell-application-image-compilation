@@ -930,6 +930,7 @@ instances =
         entail1 @Semigroup @Maybe,
         instance2 @Semigroup @Either,
         instance2 @Semigroup @Options.Mod,
+        instance1 @Semigroup @Options.InfoMod,
         instance0 @Semigroup @Text,
         instance0 @Semigroup @Builder,
         instance1 @Semigroup @Vector,
