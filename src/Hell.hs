@@ -171,7 +171,7 @@ commandParser =
 
 -- | Version of Hell.
 hellVersion :: Text
-hellVersion = "2026-05-02"
+hellVersion = "2026-05-29"
 
 -- | Dispatch on the command.
 dispatch :: Command -> IO ()
