@@ -95,7 +95,7 @@ import qualified Data.Text.Encoding as Text
 import qualified Data.Text.IO as Text
 import Data.These (These)
 import qualified Data.These as These
-import Data.Time (Day, TimeOfDay, UTCTime)
+import Data.Time (Day, TimeOfDay, UTCTime, DayOfWeek)
 import qualified Data.Time as Time
 import qualified Data.Time.Format.ISO8601 as Time
 import Data.Traversable
@@ -853,6 +853,7 @@ instances =
         instance0 @Show @Int,
         instance0 @Show @Integer,
         instance0 @Show @Day,
+        instance0 @Show @DayOfWeek,
         instance0 @Show @UTCTime,
         instance0 @Show @TimeOfDay,
         instance0 @Show @Double,
@@ -874,6 +875,7 @@ instances =
         instance0 @Eq @Int,
         instance0 @Eq @Integer,
         instance0 @Eq @Day,
+        instance0 @Eq @DayOfWeek,
         instance0 @Eq @UTCTime,
         instance0 @Eq @TimeOfDay,
         instance0 @Eq @Double,
@@ -893,6 +895,7 @@ instances =
         instance0 @Ord @Int,
         instance0 @Ord @Integer,
         instance0 @Ord @Day,
+        instance0 @Ord @DayOfWeek,
         instance0 @Ord @UTCTime,
         instance0 @Ord @TimeOfDay,
         instance0 @Ord @Double,
@@ -1707,6 +1710,7 @@ supportedTypeConstructors =
       ("()", SomeTypeRep $ typeRep @()),
       ("Handle", SomeTypeRep $ typeRep @IO.Handle),
       ("Day", SomeTypeRep $ typeRep @Day),
+      ("DayOfWeek", SomeTypeRep $ typeRep @DayOfWeek),
       ("UTCTime", SomeTypeRep $ typeRep @UTCTime),
       ("TimeOfDay", SomeTypeRep $ typeRep @TimeOfDay),
       ("Builder", SomeTypeRep $ typeRep @Builder),
@@ -1744,8 +1748,10 @@ supportedLits =
       lit' "Text.setStdin" t_setStdin,
       -- Dates
       lit' "Day.fromGregorianValid" Time.fromGregorianValid,
+      lit' "Day.toGregorian" Time.toGregorian,
       lit' "Day.addDays" Time.addDays,
       lit' "Day.diffDays" Time.diffDays,
+      lit' "Day.dayOfWeek" Time.dayOfWeek,
       lit' "Day.iso8601Show" (Text.pack . Time.iso8601Show :: Day -> Text),
       lit' "Day.iso8601ParseM" (Time.iso8601ParseM . Text.unpack :: Text -> Maybe Day),
       -- UTCTime
