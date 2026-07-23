@@ -27,6 +27,12 @@
         mkStaticApp = hp: hp.haskellPackages.callCabal2nix "hell" ./. {};
 
         app = pkgs.haskellPackages.callCabal2nix "hell" ./. {};
+        staticArm64 = mkStaticApp pkgsStaticArm64;
+        staticAmd64 = mkStaticApp pkgsStaticAmd64;
+        staticNative =
+          if system == "aarch64-linux"
+          then staticArm64
+          else staticAmd64;
       in {
         devShells.default = pkgs.haskellPackages.shellFor {
           name = "hell-dev";
@@ -49,12 +55,32 @@
             hell ${./scripts/check.hell} --dir ${./examples} --dir ${./scripts}
             touch $out
           '';
+          compiled-image-check = pkgs.runCommand "hell-compiled-image-check" {
+            buildInputs = [ app ];
+          } ''
+            cat > program.hell <<'EOF'
+            main = Text.putStrLn "compiled-image-ok"
+            EOF
+            hell --compile program.hell --output program
+            ./program > actual
+            grep -qx compiled-image-ok actual
+            touch $out
+          '';
+          static-native-compiled-image-check = pkgs.runCommand "hell-static-native-compiled-image-check" {} ''
+            cat > program.hell <<'EOF'
+            main = Text.putStrLn "static-compiled-image-ok"
+            EOF
+            ${staticNative}/bin/hell --compile program.hell --output program
+            ./program > actual
+            grep -qx static-compiled-image-ok actual
+            touch $out
+          '';
           build = app;
         };
         packages = {
           default = app;
-          static-arm64 = mkStaticApp pkgsStaticArm64;
-          static-amd64 = mkStaticApp pkgsStaticAmd64;
+          static-arm64 = staticArm64;
+          static-amd64 = staticAmd64;
         };
       }
     );

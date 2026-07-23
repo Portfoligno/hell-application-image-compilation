@@ -60,6 +60,7 @@ import qualified Data.ByteString.Builder as Builder
 import Control.Applicative (Alternative (..), optional)
 import qualified Control.Concurrent as Concurrent
 import Control.Exception (evaluate)
+import qualified Control.Exception as Exception
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Criterion.Measurement
@@ -73,6 +74,9 @@ import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as ByteString hiding (writeFile)
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
+import qualified Data.Binary.Get as Get
+import qualified Data.Binary.Put as Put
+import Data.Bits
 import Data.Constraint
 import Data.Containers.ListUtils
 import Data.Dynamic
@@ -104,6 +108,9 @@ import qualified Data.Tree as Tree
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Data.Void
+import Data.Version (showVersion)
+import Data.Word
+import qualified GHC.Float as Float
 import GHC.TypeLits
 import GHC.Types (Type)
 import qualified Language.Haskell.Exts as HSE
@@ -118,8 +125,12 @@ import qualified Options.Applicative as Options
 import qualified System.Directory as Dir
 import System.Environment
 import qualified System.Exit as Exit
+import qualified System.FilePath as FilePath
+import qualified System.Info as Info
 import qualified System.IO as IO
+import System.IO.Error (isAlreadyExistsError)
 import qualified System.IO.Temp as Temp
+import qualified System.Posix.Files as Posix
 import System.Process.Typed as Process
 import qualified System.Timeout as Timeout
 import Test.Hspec
@@ -136,6 +147,7 @@ import qualified UnliftIO.Async as Async
 data Command
   = Run FilePath
   | Check FilePath StatsEnabled
+  | CompileImage FilePath FilePath Bool StatsEnabled
   | Version
 
 data StatsEnabled = NoStats | PrintStats Int
@@ -144,11 +156,15 @@ data StatsEnabled = NoStats | PrintStats Int
 main :: IO ()
 main = do
   initializeTime
-  args <- getArgs
-  case args of
-    (x : ys)
-      | not (List.isPrefixOf "-" x) -> withArgs ys $ dispatch (Run x)
-    _ -> dispatch =<< Options.execParser opts
+  loadSelfImage >>= \case
+    NoImage -> do
+      args <- getArgs
+      case args of
+        (x : ys)
+          | not (List.isPrefixOf "-" x) -> withArgs ys $ dispatch (Run x)
+        _ -> dispatch =<< Options.execParser opts
+    LoadedImage frozen -> runFrozenProgram frozen
+    InvalidImage err -> dieImage err
   where
     opts =
       Options.info
@@ -166,6 +182,11 @@ commandParser =
       Check
         <$> Options.strOption (Options.long "check" <> Options.metavar "FILE" <> Options.help "Typecheck the given .hell file")
         <*> Options.flag NoStats (PrintStats 0) (Options.long "compiler-stats" <> Options.internal),
+      CompileImage
+        <$> Options.strOption (Options.long "compile" <> Options.metavar "FILE" <> Options.help "Emit a self-contained executable with a pre-inferred program image")
+        <*> Options.strOption (Options.short 'o' <> Options.long "output" <> Options.metavar "FILE" <> Options.help "Output executable")
+        <*> Options.switch (Options.long "force" <> Options.help "Replace an existing output file")
+        <*> Options.flag NoStats (PrintStats 0) (Options.long "compiler-stats" <> Options.internal),
       Version <$ Options.flag () () (Options.long "version" <> Options.help "Print the version")
     ]
 
@@ -181,14 +202,16 @@ dispatch (Run filePath) = do
   eval () action
 dispatch (Check filePath stats) = do
   compileFile stats filePath >>= void . evaluate
+dispatch (CompileImage input output force stats) =
+  compileImage input output force stats
 
 --------------------------------------------------------------------------------
 -- Compiler
 
--- | Parses the file with HSE, desugars it, infers it, checks it,
--- returns it. Or throws an error.
-compileFile :: StatsEnabled -> FilePath -> IO (Term () (IO ()))
-compileFile stats filePath = do
+-- | Parse, desugar, and infer a source file. The result contains no
+-- metavariables or source-level signatures.
+inferFile :: StatsEnabled -> FilePath -> IO (UTerm SomeTypeRep)
+inferFile stats filePath = do
   t0 <- getTime
   !result <- parseFile (nestStat stats) filePath
   t1 <- getTime
@@ -215,18 +238,721 @@ compileFile stats filePath = do
                     Right uterm -> do
                       t4 <- getTime
                       emitStat stats "infer" (t4 - t3)
-                      case check uterm Nil of
-                        Left err -> error $ prettyString err
-                        Right (Typed t ex) -> do
-                          t5 <- getTime
-                          emitStat stats "check" (t5 - t4)
-                          case Type.eqTypeRep (typeRepKind t) (typeRep @Type) of
-                            Nothing -> error $ "Kind error, that's nowhere near an IO ()!"
-                            Just Type.HRefl ->
-                              case Type.eqTypeRep t (typeRep @(IO ())) of
-                                Just Type.HRefl ->
-                                  pure ex
-                                Nothing -> error $ "Type isn't IO (), but: " ++ show t
+                      pure uterm
+
+-- | Reconstruct the typed GADT and require the conventional entry point.
+linkMain :: UTerm SomeTypeRep -> Either String (Term () (IO ()))
+linkMain uterm =
+  case check uterm Nil of
+    Left err -> Left $ prettyString err
+    Right (Typed t ex) ->
+      case Type.eqTypeRep (typeRepKind t) (typeRep @Type) of
+        Nothing -> Left "Kind error, that's nowhere near an IO ()!"
+        Just Type.HRefl ->
+          case Type.eqTypeRep t (typeRep @(IO ())) of
+            Just Type.HRefl -> Right ex
+            Nothing -> Left $ "Type isn't IO (), but: " ++ show t
+
+-- | Compile a source file through the normal checker.
+compileFile :: StatsEnabled -> FilePath -> IO (Term () (IO ()))
+compileFile stats filePath = do
+  inferred <- inferFile stats filePath
+  t0 <- getTime
+  case linkMain inferred of
+    Left err -> error err
+    Right action -> do
+      t1 <- getTime
+      emitStat stats "check" (t1 - t0)
+      pure action
+
+--------------------------------------------------------------------------------
+-- Compiled application images
+
+data FrozenProgram = FrozenProgram
+  { frozenSourceLabel :: !Text,
+    frozenTargetOS :: !Text,
+    frozenTargetArch :: !Text,
+    frozenCompilerVersion :: !Text,
+    frozenMainTerm :: !FrozenTerm
+  }
+  deriving (Eq, Show)
+
+data FrozenTerm
+  = FVar !FrozenType !Text
+  | FLam !FrozenType !FrozenBinding !FrozenTerm
+  | FApp !FrozenType !FrozenTerm !FrozenTerm
+  | FPrim !FrozenType !FrozenPrimitive ![FrozenType]
+  deriving (Eq, Show)
+
+data FrozenBinding = FSingleton !Text | FTuple ![Text]
+  deriving (Eq, Show)
+
+data FrozenPrimitive
+  = FPName !Text
+  | FPChar !Char
+  | FPText !Text
+  | FPInt !Integer
+  | FPDoubleBits !Word64
+  | FPUnit
+  | FPSSymbol !Text
+  deriving (Eq, Show)
+
+data FrozenType
+  = FTCon !TyConKey
+  | FTApp !FrozenType !FrozenType
+  | FTFun !FrozenType !FrozenType
+  | FTSymbol !Text
+  deriving (Eq, Show)
+
+data TyConKey = TyConKey !Text !Text !Text
+  deriving (Eq, Ord, Show)
+
+data ImageError
+  = UnexpectedSignatureAfterInference
+  | UnsupportedPrimitive Prim
+  | UnknownPrimitive Text
+  | UnknownTypeConstructor TyConKey
+  | InvalidTypeApplication FrozenType FrozenType
+  | InvalidFunctionType FrozenType FrozenType
+  | InvalidLinkedProgram Text
+  | DynamicSymbolNotFound TyConKey
+  | IntegerLiteralOutOfRange Integer
+  | UnsupportedImageFormat Word16
+  | UnsupportedImageFlags Word16
+  | InvalidFooterSize Word32
+  | PayloadTooLarge Word64
+  | InvalidPayloadLength Word64
+  | PayloadChecksumMismatch
+  | RuntimeAbiMismatch Word64 Word64
+  | DecodeFailure Word64 Text
+  | TrailingPayloadBytes Word64
+  | OutputAlreadyExists FilePath
+  | RefusingToOverwriteSelf FilePath
+  | EmitterAlreadyContainsImage
+  | UnsupportedImageTarget Text
+  deriving (Show)
+
+data SelfImage
+  = NoImage
+  | LoadedImage FrozenProgram
+  | InvalidImage ImageError
+
+imageFormatVersion :: Word16
+imageFormatVersion = 1
+
+imageAbiVersion :: Word32
+imageAbiVersion = 1
+
+imageFooterSize :: Word32
+imageFooterSize = 48
+
+imageFooterMagic :: ByteString
+imageFooterMagic = "HELL-IMAGE-V1\0\0\0"
+
+maximumPayloadSize, maximumTextSize :: Word64
+maximumPayloadSize = 64 * 1024 * 1024
+maximumTextSize = 16 * 1024 * 1024
+
+maximumListLength :: Word32
+maximumListLength = 100 * 1024
+
+maximumImageDepth :: Int
+maximumImageDepth = 4096
+
+maximumTermNodes, maximumTypeNodes :: Word32
+maximumTermNodes = 100 * 1024
+maximumTypeNodes = 500 * 1024
+
+data DecodeBudget = DecodeBudget !Word32 !Word32
+
+type ImageGet = StateT DecodeBudget Get.Get
+
+initialDecodeBudget :: DecodeBudget
+initialDecodeBudget = DecodeBudget maximumTermNodes maximumTypeNodes
+
+-- | Source labels, spans, schemas, and live closures are deliberately absent.
+freezeProgram :: FilePath -> UTerm SomeTypeRep -> Either ImageError FrozenProgram
+freezeProgram source inferred = do
+  let symbols = dynamicSymbolTable inferred
+  frozenMainTerm <- freezeTerm symbols inferred
+  pure
+    FrozenProgram
+      { frozenSourceLabel = Text.pack $ FilePath.takeFileName source,
+        frozenTargetOS = Text.pack Info.os,
+        frozenTargetArch = Text.pack Info.arch,
+        frozenCompilerVersion = Text.pack $ showVersion Info.compilerVersion,
+        frozenMainTerm
+      }
+
+freezeTerm :: Map TyConKey Text -> UTerm SomeTypeRep -> Either ImageError FrozenTerm
+freezeTerm symbols = \case
+  UVar _ ty name -> FVar <$> freezeType symbols ty <*> pure (Text.pack name)
+  ULam _ ty binding _ body ->
+    FLam <$> freezeType symbols ty <*> pure (freezeBinding binding) <*> freezeTerm symbols body
+  UApp _ ty f x ->
+    FApp <$> freezeType symbols ty <*> freezeTerm symbols f <*> freezeTerm symbols x
+  USig {} -> Left UnexpectedSignatureAfterInference
+  UForall prim _ ty _ _ _ _ inferredArgs ->
+    FPrim
+      <$> freezeType symbols ty
+      <*> freezePrimitive prim
+      <*> traverse (freezeType symbols) inferredArgs
+
+freezeBinding :: Binding -> FrozenBinding
+freezeBinding (Singleton name) = FSingleton $ Text.pack name
+freezeBinding (Tuple names) = FTuple $ map Text.pack names
+
+freezePrimitive :: Prim -> Either ImageError FrozenPrimitive
+freezePrimitive = \case
+  NameP name
+    | Map.member name supportedLits || Map.member name polyLits ->
+        Right $ FPName $ Text.pack name
+    | otherwise -> Left $ UnsupportedPrimitive $ NameP name
+  UnitP -> Right FPUnit
+  SSymbolP symbol -> Right $ FPSSymbol $ Text.pack symbol
+  LitP literal -> case literal of
+    HSE.Char _ value _ -> Right $ FPChar value
+    HSE.String _ value _ -> Right $ FPText $ Text.pack value
+    HSE.Int _ value _
+      | value < toInteger (minBound :: Int) || value > toInteger (maxBound :: Int) ->
+          Left $ IntegerLiteralOutOfRange value
+      | otherwise -> Right $ FPInt value
+    HSE.Frac _ _ spelling
+      | Just value <- Read.readMaybe spelling ->
+          Right $ FPDoubleBits $ Float.castDoubleToWord64 value
+    _ -> Left $ UnsupportedPrimitive $ LitP literal
+
+dynamicSymbolTable :: UTerm a -> Map TyConKey Text
+dynamicSymbolTable term =
+  Map.fromList $ map symbolEntry $ Set.toList $ go term
+  where
+    symbolEntry symbol =
+      case someSymbolVal $ Text.unpack symbol of
+        SomeSymbol proxy ->
+          case Type.someTypeRep proxy of
+            SomeTypeRep rep -> (typeRepKey rep, symbol)
+
+    go = \case
+      UVar {} -> mempty
+      ULam _ _ _ _ body -> go body
+      UApp _ _ f x -> go f <> go x
+      USig _ _ body _ -> go body
+      UForall (SSymbolP symbol) _ _ _ _ _ _ _ -> Set.singleton $ Text.pack symbol
+      UForall _ _ _ _ _ _ _ _ -> mempty
+
+typeRepKey :: TypeRep a -> TyConKey
+typeRepKey rep =
+  let tyCon = Type.typeRepTyCon rep
+   in TyConKey
+        (Text.pack $ Type.tyConPackage tyCon)
+        (Text.pack $ Type.tyConModule tyCon)
+        (Text.pack $ Type.tyConName tyCon)
+
+freezeType :: Map TyConKey Text -> SomeTypeRep -> Either ImageError FrozenType
+freezeType symbols (SomeTypeRep rep) =
+  case rep of
+    Type.Fun a b ->
+      FTFun <$> freezeType symbols (SomeTypeRep a) <*> freezeType symbols (SomeTypeRep b)
+    Type.App f x ->
+      FTApp <$> freezeType symbols (SomeTypeRep f) <*> freezeType symbols (SomeTypeRep x)
+    con@Type.Con {}
+      | Just Type.HRefl <- Type.eqTypeRep (typeRepKind con) (typeRep @Symbol) ->
+          maybe (Left $ DynamicSymbolNotFound key) (Right . FTSymbol) $ Map.lookup key symbols
+      | Just registered <- Map.lookup key typeRegistry,
+        registered == SomeTypeRep con ->
+          Right $ FTCon key
+      | otherwise -> Left $ UnknownTypeConstructor key
+      where
+        key = typeRepKey con
+
+typeRegistry :: Map TyConKey SomeTypeRep
+typeRegistry =
+  Map.fromList
+    [ (typeRepKey rep, SomeTypeRep rep)
+      | root <- registryRoots,
+        SomeTypeRep rep <- collectTypeConstructorLeaves root,
+        Nothing <- [Type.eqTypeRep (typeRepKind rep) (typeRep @Symbol)]
+    ]
+  where
+    registryRoots =
+      Map.elems supportedTypeConstructors
+        <> map snd (Map.elems supportedLits)
+        <> concatMap (collectIRepTypes . (\(_, _, schema, _) -> schema)) (Map.elems polyLits)
+        <> concatMap (\(a, b) -> [a, b]) (Map.keys instances.getInstances)
+
+collectIRepTypes :: IRep a -> [SomeTypeRep]
+collectIRepTypes = \case
+  IVar _ -> []
+  IApp f x -> collectIRepTypes f <> collectIRepTypes x
+  IFun a b -> collectIRepTypes a <> collectIRepTypes b
+  ICon rep -> [rep]
+
+collectTypeConstructorLeaves :: SomeTypeRep -> [SomeTypeRep]
+collectTypeConstructorLeaves someRep@(SomeTypeRep rep) =
+  case rep of
+    Type.Fun a b ->
+      collectTypeConstructorLeaves (SomeTypeRep a)
+        <> collectTypeConstructorLeaves (SomeTypeRep b)
+    Type.App f x ->
+      collectTypeConstructorLeaves (SomeTypeRep f)
+        <> collectTypeConstructorLeaves (SomeTypeRep x)
+    Type.Con {} -> [someRep]
+
+thawProgram :: FrozenProgram -> Either ImageError (UTerm SomeTypeRep)
+thawProgram FrozenProgram {frozenMainTerm} =
+  thawTerm (frozenSymbols frozenMainTerm) frozenMainTerm
+
+frozenSymbols :: FrozenTerm -> Map TyConKey SomeTypeRep
+frozenSymbols term =
+  Map.fromList $ map symbolEntry $ Set.toList $ go term
+  where
+    symbolEntry symbol =
+      case someSymbolVal $ Text.unpack symbol of
+        SomeSymbol proxy ->
+          case Type.someTypeRep proxy of
+            someRep@(SomeTypeRep rep) -> (typeRepKey rep, someRep)
+
+    go = \case
+      FVar {} -> mempty
+      FLam _ _ body -> go body
+      FApp _ f x -> go f <> go x
+      FPrim _ (FPSSymbol symbol) _ -> Set.singleton symbol
+      FPrim {} -> mempty
+
+thawTerm :: Map TyConKey SomeTypeRep -> FrozenTerm -> Either ImageError (UTerm SomeTypeRep)
+thawTerm symbols = \case
+  FVar ty name ->
+    UVar HSE.noSrcSpan <$> thawType symbols ty <*> pure (Text.unpack name)
+  FLam ty binding body ->
+    ULam HSE.noSrcSpan
+      <$> thawType symbols ty
+      <*> pure (thawBinding binding)
+      <*> pure Nothing
+      <*> thawTerm symbols body
+  FApp ty f x ->
+    UApp HSE.noSrcSpan
+      <$> thawType symbols ty
+      <*> thawTerm symbols f
+      <*> thawTerm symbols x
+  FPrim ty prim args -> do
+    ty' <- thawType symbols ty
+    args' <- traverse (thawType symbols) args
+    thawPrimitive ty' prim args'
+
+thawBinding :: FrozenBinding -> Binding
+thawBinding (FSingleton name) = Singleton $ Text.unpack name
+thawBinding (FTuple names) = Tuple $ map Text.unpack names
+
+thawType :: Map TyConKey SomeTypeRep -> FrozenType -> Either ImageError SomeTypeRep
+thawType symbols = \case
+  FTCon key ->
+    maybe (Left $ UnknownTypeConstructor key) Right $ Map.lookup key typeRegistry
+  FTSymbol text ->
+    case someSymbolVal (Text.unpack text) of
+      SomeSymbol proxy -> Right $ Type.someTypeRep proxy
+  FTApp f x -> do
+    f' <- thawType symbols f
+    x' <- thawType symbols x
+    maybe (Left $ InvalidTypeApplication f x) Right $ applyTypes f' x'
+  FTFun a b -> do
+    a' <- thawType symbols a
+    b' <- thawType symbols b
+    case (a', b') of
+      (StarTypeRep aRep, StarTypeRep bRep) ->
+        Right $ SomeTypeRep $ Type.Fun aRep bRep
+      _ -> Left $ InvalidFunctionType a b
+
+thawPrimitive ::
+  SomeTypeRep ->
+  FrozenPrimitive ->
+  [SomeTypeRep] ->
+  Either ImageError (UTerm SomeTypeRep)
+thawPrimitive ty primitive args = do
+  template <- case primitive of
+    FPName name ->
+      case Map.lookup (Text.unpack name) supportedLits of
+        Just (term, _) -> Right term
+        Nothing ->
+          case Map.lookup (Text.unpack name) polyLits of
+            Just (forall', vars, schema, _) ->
+              Right $ UForall (NameP $ Text.unpack name) HSE.noSrcSpan () [] forall' vars schema []
+            Nothing -> Left $ UnknownPrimitive name
+    FPChar value ->
+      Right $ litWithSpanBare (LitP $ HSE.Char HSE.noSrcSpan value (show value)) HSE.noSrcSpan (typeRep @Char) value
+    FPText value ->
+      Right $ litWithSpanBare (LitP $ HSE.String HSE.noSrcSpan (Text.unpack value) (show value)) HSE.noSrcSpan (typeRep @Text) value
+    FPInt value
+      | value < toInteger (minBound :: Int) || value > toInteger (maxBound :: Int) ->
+          Left $ IntegerLiteralOutOfRange value
+      | otherwise ->
+          let int = fromInteger value :: Int
+           in Right $ litWithSpanBare (LitP $ HSE.Int HSE.noSrcSpan value (show value)) HSE.noSrcSpan (typeRep @Int) int
+    FPDoubleBits bits ->
+      let value = Float.castWord64ToDouble bits
+       in Right $ litWithSpanBare (LitP $ HSE.Frac HSE.noSrcSpan 0 (show value)) HSE.noSrcSpan (typeRep @Double) value
+    FPUnit -> Right $ litWithSpan UnitP HSE.noSrcSpan ()
+    FPSSymbol symbol ->
+      withSomeSSymbol (Text.unpack symbol) \(value@(SSymbol :: SSymbol s)) ->
+        Right $ litWithSpanBare (SSymbolP $ Text.unpack symbol) HSE.noSrcSpan (typeRep @(SSymbol s)) value
+  case template of
+    UForall prim loc () explicit forall' vars schema _ ->
+      Right $ UForall prim loc ty explicit forall' vars schema args
+    _ -> Left $ UnknownPrimitive $ Text.pack $ show primitive
+
+-- Explicit, versioned binary schema. Constructor ordering is not part of it.
+encodeProgram :: FrozenProgram -> ByteString
+encodeProgram = L.toStrict . Put.runPut . putFrozenProgram
+
+encodeProgramChecked :: FrozenProgram -> Either ImageError ByteString
+encodeProgramChecked program = do
+  let payload = encodeProgram program
+  _ <- validateProgramPayload payload
+  pure payload
+
+validateProgramPayload :: ByteString -> Either ImageError FrozenProgram
+validateProgramPayload payload = do
+  frozen <- decodeProgram payload
+  inferred <- thawProgram frozen
+  case linkMain inferred of
+    Left err -> Left $ InvalidLinkedProgram $ Text.pack err
+    Right _ -> Right frozen
+
+decodeProgram :: ByteString -> Either ImageError FrozenProgram
+decodeProgram bytes
+  | fromIntegral (ByteString.length bytes) > maximumPayloadSize =
+      Left $ PayloadTooLarge $ fromIntegral $ ByteString.length bytes
+  | otherwise =
+      case Get.runGetOrFail (evalStateT (getFrozenProgram 0) initialDecodeBudget) (L.fromStrict bytes) of
+        Left (_, offset, message) -> Left $ DecodeFailure (fromIntegral offset) $ Text.pack message
+        Right (trailing, offset, program)
+          | L.null trailing -> Right program
+          | otherwise -> Left $ TrailingPayloadBytes $ fromIntegral offset
+
+putFrozenProgram :: FrozenProgram -> Put.Put
+putFrozenProgram FrozenProgram {frozenSourceLabel, frozenTargetOS, frozenTargetArch, frozenCompilerVersion, frozenMainTerm} = do
+  putText frozenSourceLabel
+  putText frozenTargetOS
+  putText frozenTargetArch
+  putText frozenCompilerVersion
+  putFrozenTerm frozenMainTerm
+
+getFrozenProgram :: Int -> ImageGet FrozenProgram
+getFrozenProgram depth = do
+  ensureDepth depth
+  FrozenProgram <$> getText <*> getText <*> getText <*> getText <*> getFrozenTerm (depth + 1)
+
+putFrozenTerm :: FrozenTerm -> Put.Put
+putFrozenTerm = \case
+  FVar ty name -> Put.putWord8 0 >> putFrozenType ty >> putText name
+  FLam ty binding body -> Put.putWord8 1 >> putFrozenType ty >> putFrozenBinding binding >> putFrozenTerm body
+  FApp ty f x -> Put.putWord8 2 >> putFrozenType ty >> putFrozenTerm f >> putFrozenTerm x
+  FPrim ty prim args -> Put.putWord8 3 >> putFrozenType ty >> putFrozenPrimitive prim >> putList putFrozenType args
+
+getFrozenTerm :: Int -> ImageGet FrozenTerm
+getFrozenTerm depth = do
+  ensureDepth depth
+  consumeTermNode
+  lift Get.getWord8 >>= \case
+    0 -> FVar <$> getFrozenType (depth + 1) <*> getText
+    1 -> FLam <$> getFrozenType (depth + 1) <*> getFrozenBinding <*> getFrozenTerm (depth + 1)
+    2 -> FApp <$> getFrozenType (depth + 1) <*> getFrozenTerm (depth + 1) <*> getFrozenTerm (depth + 1)
+    3 -> FPrim <$> getFrozenType (depth + 1) <*> getFrozenPrimitive <*> getList (getFrozenType $ depth + 1)
+    tag -> fail $ "unknown FrozenTerm tag " <> show tag
+
+putFrozenBinding :: FrozenBinding -> Put.Put
+putFrozenBinding = \case
+  FSingleton name -> Put.putWord8 0 >> putText name
+  FTuple names -> Put.putWord8 1 >> putList putText names
+
+getFrozenBinding :: ImageGet FrozenBinding
+getFrozenBinding =
+  lift Get.getWord8 >>= \case
+    0 -> FSingleton <$> getText
+    1 -> FTuple <$> getList getText
+    tag -> fail $ "unknown FrozenBinding tag " <> show tag
+
+putFrozenPrimitive :: FrozenPrimitive -> Put.Put
+putFrozenPrimitive = \case
+  FPName name -> Put.putWord8 0 >> putText name
+  FPChar value -> Put.putWord8 1 >> Put.putWord32be (fromIntegral $ fromEnum value)
+  FPText value -> Put.putWord8 2 >> putText value
+  FPInt value -> Put.putWord8 3 >> putInteger value
+  FPDoubleBits bits -> Put.putWord8 4 >> Put.putWord64be bits
+  FPUnit -> Put.putWord8 5
+  FPSSymbol symbol -> Put.putWord8 6 >> putText symbol
+
+getFrozenPrimitive :: ImageGet FrozenPrimitive
+getFrozenPrimitive =
+  lift Get.getWord8 >>= \case
+    0 -> FPName <$> getText
+    1 -> do
+      scalar <- lift Get.getWord32be
+      if scalar <= 0x10ffff && not (scalar >= 0xd800 && scalar <= 0xdfff)
+        then pure $ FPChar $ toEnum $ fromIntegral scalar
+        else fail "invalid Unicode scalar"
+    2 -> FPText <$> getText
+    3 -> FPInt <$> getInteger
+    4 -> FPDoubleBits <$> lift Get.getWord64be
+    5 -> pure FPUnit
+    6 -> FPSSymbol <$> getText
+    tag -> fail $ "unknown FrozenPrimitive tag " <> show tag
+
+putFrozenType :: FrozenType -> Put.Put
+putFrozenType = \case
+  FTCon (TyConKey packageName moduleName constructorName) ->
+    Put.putWord8 0 >> putText packageName >> putText moduleName >> putText constructorName
+  FTApp f x -> Put.putWord8 1 >> putFrozenType f >> putFrozenType x
+  FTFun a b -> Put.putWord8 2 >> putFrozenType a >> putFrozenType b
+  FTSymbol symbol -> Put.putWord8 3 >> putText symbol
+
+getFrozenType :: Int -> ImageGet FrozenType
+getFrozenType depth = do
+  ensureDepth depth
+  consumeTypeNode
+  lift Get.getWord8 >>= \case
+    0 -> FTCon <$> (TyConKey <$> getText <*> getText <*> getText)
+    1 -> FTApp <$> getFrozenType (depth + 1) <*> getFrozenType (depth + 1)
+    2 -> FTFun <$> getFrozenType (depth + 1) <*> getFrozenType (depth + 1)
+    3 -> FTSymbol <$> getText
+    tag -> fail $ "unknown FrozenType tag " <> show tag
+
+putText :: Text -> Put.Put
+putText text = do
+  let bytes = Text.encodeUtf8 text
+  Put.putWord32be $ fromIntegral $ ByteString.length bytes
+  Put.putByteString bytes
+
+getText :: ImageGet Text
+getText = do
+  length' <- lift Get.getWord32be
+  when (fromIntegral length' > maximumTextSize) $ fail "text field exceeds limit"
+  bytes <- lift $ Get.getByteString $ fromIntegral length'
+  either (fail . show) pure $ Text.decodeUtf8' bytes
+
+putList :: (a -> Put.Put) -> [a] -> Put.Put
+putList putItem values = do
+  Put.putWord32be $ fromIntegral $ length values
+  traverse_ putItem values
+
+getList :: ImageGet a -> ImageGet [a]
+getList getItem = do
+  count <- lift Get.getWord32be
+  when (count > maximumListLength) $ fail "list exceeds limit"
+  replicateM (fromIntegral count) getItem
+
+putInteger :: Integer -> Put.Put
+putInteger value = do
+  Put.putWord8 $ if value < 0 then 1 else 0
+  let bytes = integerMagnitude $ abs value
+  Put.putWord32be $ fromIntegral $ ByteString.length bytes
+  Put.putByteString bytes
+
+getInteger :: ImageGet Integer
+getInteger = do
+  sign <- lift Get.getWord8
+  when (sign > 1) $ fail "invalid integer sign"
+  count <- lift Get.getWord32be
+  when (count > fromIntegral (finiteBitSize (0 :: Int) `div` 8)) $ fail "integer exceeds target Int width"
+  bytes <- lift $ Get.getByteString $ fromIntegral count
+  when (not (ByteString.null bytes) && ByteString.head bytes == 0) $ fail "noncanonical integer magnitude"
+  when (ByteString.null bytes && sign /= 0) $ fail "noncanonical negative zero"
+  let magnitude = ByteString.foldl' (\n byte -> n * 256 + fromIntegral byte) 0 bytes
+  pure $ if sign == 1 then negate magnitude else magnitude
+
+integerMagnitude :: Integer -> ByteString
+integerMagnitude 0 = ByteString.empty
+integerMagnitude value = ByteString.pack $ reverse $ go value
+  where
+    go 0 = []
+    go n = fromIntegral (n `mod` 256) : go (n `div` 256)
+
+ensureDepth :: Int -> ImageGet ()
+ensureDepth depth = when (depth > maximumImageDepth) $ fail "image nesting exceeds limit"
+
+consumeTermNode :: ImageGet ()
+consumeTermNode = do
+  DecodeBudget terms types <- get
+  when (terms == 0) $ fail "term node budget exceeded"
+  put $ DecodeBudget (terms - 1) types
+
+consumeTypeNode :: ImageGet ()
+consumeTypeNode = do
+  DecodeBudget terms types <- get
+  when (types == 0) $ fail "type node budget exceeded"
+  put $ DecodeBudget terms (types - 1)
+
+fnv1a64 :: ByteString -> Word64
+fnv1a64 = ByteString.foldl' (\hash byte -> (hash `xor` fromIntegral byte) * 1099511628211) 14695981039346656037
+
+runtimeAbiFingerprint :: Word64
+runtimeAbiFingerprint =
+  fnv1a64 $
+    Text.encodeUtf8 $
+      Text.intercalate
+        "\0"
+        [ Text.pack $ show imageAbiVersion,
+          hellVersion,
+          Text.pack $ showVersion Info.compilerVersion,
+          Text.pack Info.os,
+          Text.pack Info.arch,
+          Text.pack $ show imageFormatVersion
+        ]
+
+putFooter :: Word64 -> Word64 -> Put.Put
+putFooter payloadLength checksum = do
+  Put.putByteString imageFooterMagic
+  Put.putWord16be imageFormatVersion
+  Put.putWord16be 0
+  Put.putWord32be imageFooterSize
+  Put.putWord64be payloadLength
+  Put.putWord64be checksum
+  Put.putWord64be runtimeAbiFingerprint
+
+getFooter :: Get.Get (Word64, Word64, Word64)
+getFooter = do
+  magic <- Get.getByteString 16
+  when (magic /= imageFooterMagic) $ fail "invalid image footer magic"
+  version <- Get.getWord16be
+  when (version /= imageFormatVersion) $ fail $ "unsupported image version " <> show version
+  flags <- Get.getWord16be
+  when (flags /= 0) $ fail $ "unsupported image flags " <> show flags
+  footerSize <- Get.getWord32be
+  when (footerSize /= imageFooterSize) $ fail $ "invalid footer size " <> show footerSize
+  (,,) <$> Get.getWord64be <*> Get.getWord64be <*> Get.getWord64be
+
+loadSelfImage :: IO SelfImage
+loadSelfImage = getExecutablePath >>= loadImageFromPath
+
+loadImageFromPath :: FilePath -> IO SelfImage
+loadImageFromPath path =
+  Exception.handle
+    (\(err :: Exception.IOException) -> pure $ InvalidImage $ DecodeFailure 0 $ Text.pack $ show err)
+    $ IO.withBinaryFile path IO.ReadMode \handle -> do
+      fileSize <- IO.hFileSize handle
+      if fileSize < fromIntegral imageFooterSize
+        then pure NoImage
+        else do
+          IO.hSeek handle IO.AbsoluteSeek $ fileSize - fromIntegral imageFooterSize
+          footer <- ByteString.hGet handle $ fromIntegral imageFooterSize
+          if ByteString.take 16 footer /= imageFooterMagic
+            then pure NoImage
+            else case Get.runGetOrFail getFooter (L.fromStrict footer) of
+              Left (_, offset, message) ->
+                pure $ InvalidImage $ DecodeFailure (fromIntegral offset) $ Text.pack message
+              Right (trailing, _, (payloadLength, checksum, abi))
+                | not (L.null trailing) -> pure $ InvalidImage $ TrailingPayloadBytes 0
+                | payloadLength > maximumPayloadSize -> pure $ InvalidImage $ PayloadTooLarge payloadLength
+                | payloadLength > fromIntegral fileSize - fromIntegral imageFooterSize ->
+                    pure $ InvalidImage $ InvalidPayloadLength payloadLength
+                | abi /= runtimeAbiFingerprint ->
+                    pure $ InvalidImage $ RuntimeAbiMismatch runtimeAbiFingerprint abi
+                | otherwise -> do
+                    let payloadStart =
+                          fileSize - fromIntegral imageFooterSize - fromIntegral payloadLength
+                    IO.hSeek handle IO.AbsoluteSeek payloadStart
+                    payload <- ByteString.hGet handle $ fromIntegral payloadLength
+                    if fromIntegral (ByteString.length payload) /= payloadLength
+                      then pure $ InvalidImage $ InvalidPayloadLength payloadLength
+                      else
+                        if fnv1a64 payload /= checksum
+                          then pure $ InvalidImage PayloadChecksumMismatch
+                          else pure $ either InvalidImage LoadedImage $ decodeProgram payload
+
+runFrozenProgram :: FrozenProgram -> IO ()
+runFrozenProgram frozen
+  | frozen.frozenTargetOS /= Text.pack Info.os =
+      dieImage $ UnsupportedImageTarget frozen.frozenTargetOS
+  | frozen.frozenTargetArch /= Text.pack Info.arch =
+      dieImage $ UnsupportedImageTarget frozen.frozenTargetArch
+  | otherwise =
+      case thawProgram frozen of
+        Left err -> dieImage err
+        Right inferred ->
+          case linkMain inferred of
+            Left err -> Exit.die $ "hell image: " <> err
+            Right action -> eval () action
+
+compileImage :: FilePath -> FilePath -> Bool -> StatsEnabled -> IO ()
+compileImage input output force stats = do
+  when (Info.os /= "linux") $ dieImage $ UnsupportedImageTarget $ Text.pack Info.os
+  inferred <- inferFile stats input
+  case linkMain inferred of
+    Left err -> Exit.die err
+    Right _ -> pure ()
+  frozen <- either dieImage pure $ freezeProgram input inferred
+  payload <- either dieImage pure $ encodeProgramChecked frozen
+  emitExecutable output force payload
+
+emitExecutable :: FilePath -> Bool -> ByteString -> IO ()
+emitExecutable output force payload = do
+  when (fromIntegral (ByteString.length payload) > maximumPayloadSize) $
+    dieImage $ PayloadTooLarge $ fromIntegral $ ByteString.length payload
+  case validateProgramPayload payload of
+    Left err -> dieImage err
+    Right _ -> pure ()
+  self <- getExecutablePath >>= Dir.canonicalizePath
+  outputAbsolute <- Dir.makeAbsolute output
+  let normalizedOutput = FilePath.normalise outputAbsolute
+      outputDirectory = FilePath.takeDirectory normalizedOutput
+      outputTemplate = FilePath.takeFileName normalizedOutput <> ".tmp"
+  Dir.createDirectoryIfMissing True outputDirectory
+  resolvedOutputDirectory <- Dir.canonicalizePath outputDirectory
+  let resolvedOutput =
+        FilePath.normalise $
+          resolvedOutputDirectory FilePath.</> FilePath.takeFileName normalizedOutput
+  when (resolvedOutput == FilePath.normalise self) $ dieImage $ RefusingToOverwriteSelf output
+  loadImageFromPath self >>= \case
+    NoImage -> pure ()
+    LoadedImage {} -> dieImage EmitterAlreadyContainsImage
+    InvalidImage err -> dieImage err
+  Exception.bracketOnError
+    (IO.openBinaryTempFile resolvedOutputDirectory outputTemplate)
+    (\(temporary, handle) -> IO.hClose handle `Exception.finally` removeIfPresent temporary)
+    \(temporary, handle) -> do
+      IO.withBinaryFile self IO.ReadMode $ \source -> copyHandle source handle
+      ByteString.hPut handle payload
+      L.hPut handle $ Put.runPut $ putFooter (fromIntegral $ ByteString.length payload) (fnv1a64 payload)
+      IO.hFlush handle
+      IO.hClose handle
+      permissions <- Dir.getPermissions self
+      Dir.setPermissions temporary permissions {Dir.readable = True, Dir.executable = True}
+      installExecutable force temporary resolvedOutput
+
+installExecutable :: Bool -> FilePath -> FilePath -> IO ()
+installExecutable True temporary output = Dir.renameFile temporary output
+installExecutable False temporary output =
+  Exception.catch
+    (Posix.createLink temporary output >> Dir.removeFile temporary)
+    \(err :: Exception.IOException) ->
+      if isAlreadyExistsError err
+        then dieImage $ OutputAlreadyExists output
+        else Exception.throwIO err
+
+copyHandle :: IO.Handle -> IO.Handle -> IO ()
+copyHandle source destination = do
+  chunk <- ByteString.hGetSome source (64 * 1024)
+  unless (ByteString.null chunk) $ ByteString.hPut destination chunk >> copyHandle source destination
+
+removeIfPresent :: FilePath -> IO ()
+removeIfPresent path = do
+  exists <- Dir.doesPathExist path
+  when exists $ Dir.removeFile path
+
+dieImage :: ImageError -> IO a
+dieImage = Exit.die . ("hell image: " <>) . renderImageError
+
+renderImageError :: ImageError -> String
+renderImageError = \case
+  UnknownPrimitive name -> "unknown primitive: " <> Text.unpack name
+  UnknownTypeConstructor key -> "unknown type constructor: " <> show key
+  PayloadChecksumMismatch -> "payload checksum mismatch"
+  RuntimeAbiMismatch expected actual ->
+    "incompatible runtime ABI (expected " <> show expected <> ", got " <> show actual <> ")"
+  OutputAlreadyExists path -> "output already exists: " <> path
+  RefusingToOverwriteSelf path -> "refusing to overwrite running executable: " <> path
+  EmitterAlreadyContainsImage -> "an emitted executable cannot emit another image"
+  UnsupportedImageTarget target -> "unsupported image target: " <> Text.unpack target
+  err -> show err
 
 emitStat :: StatsEnabled -> Text -> Double -> IO ()
 emitStat NoStats _ _ = pure ()
@@ -632,6 +1358,7 @@ data Prim
   | NameP String
   | UnitP
   | SSymbolP String
+  deriving (Show)
 
 data SomeStarType = forall (a :: Type). SomeStarType (TypeRep a)
 
@@ -3299,6 +4026,7 @@ spec = do
   freeVariablesSpec
   anyCyclesSpec
   desugarTypeSpec
+  imageSpec
 
 parseSpec :: Spec
 parseSpec = do
@@ -3358,3 +4086,119 @@ desugarTypeSpec = do
     try e = case fmap (desugarStarType mempty) $ HSE.parseType e of
       HSE.ParseOk r -> r
       _ -> error "Parse failed."
+
+imageSpec :: Spec
+imageSpec = do
+  describe "compiled application image" do
+    it "round-trips the explicit payload codec" do
+      let intKey = typeRepKey $ typeRep @Int
+          program =
+            FrozenProgram
+              { frozenSourceLabel = "example.hell",
+                frozenTargetOS = Text.pack Info.os,
+                frozenTargetArch = Text.pack Info.arch,
+                frozenCompilerVersion = Text.pack $ showVersion Info.compilerVersion,
+                frozenMainTerm =
+                  FApp
+                    (FTCon intKey)
+                    (FPrim (FTCon intKey) (FPName "example") [FTSymbol "field-λ"])
+                    (FPrim (FTCon intKey) (FPInt $ toInteger (minBound :: Int)) [])
+              }
+      case decodeProgram (encodeProgram program) of
+        Left err -> expectationFailure $ show err
+        Right actual -> actual `shouldBe` program
+
+    it "rejects trailing payload bytes" do
+      let program =
+            FrozenProgram "x.hell" "linux" "x86_64" "ghc" $
+              FPrim (FTCon $ typeRepKey $ typeRep @()) FPUnit []
+      decodeProgram (encodeProgram program <> "\0") `shouldSatisfy` \case
+        Left TrailingPayloadBytes {} -> True
+        _ -> False
+
+    it "round-trips registered structural types" do
+      let original = SomeTypeRep $ typeRep @(IO (Maybe Text))
+      case freezeType mempty original of
+        Left err -> expectationFailure $ show err
+        Right frozen ->
+          case thawType mempty frozen of
+            Left err -> expectationFailure $ show err
+            Right thawed -> thawed `shouldBe` original
+
+    it "rejects unregistered type constructors while freezing" do
+      freezeType mempty (SomeTypeRep $ typeRep @Prim) `shouldSatisfy` \case
+        Left UnknownTypeConstructor {} -> True
+        _ -> False
+
+    it "rejects noncanonical and wider-than-Int integer encodings" do
+      let intBytes = finiteBitSize (0 :: Int) `div` 8
+          oversized =
+            L.toStrict $ Put.runPut do
+              Put.putWord8 0
+              Put.putWord32be $ fromIntegral $ intBytes + 1
+              Put.putByteString $ ByteString.replicate (intBytes + 1) 1
+          leadingZero =
+            L.toStrict $ Put.runPut do
+              Put.putWord8 0
+              Put.putWord32be 2
+              Put.putByteString "\0\1"
+          negativeZero =
+            L.toStrict $ Put.runPut do
+              Put.putWord8 1
+              Put.putWord32be 0
+      getIntegerFromBytes oversized `shouldSatisfy` Either.isLeft
+      getIntegerFromBytes leadingZero `shouldSatisfy` Either.isLeft
+      getIntegerFromBytes negativeZero `shouldSatisfy` Either.isLeft
+
+    it "enforces aggregate term and type node budgets" do
+      let intType = FTCon $ typeRepKey $ typeRep @Int
+          variable = FVar intType "x"
+          application = FApp intType variable variable
+      runImageGetFromBytes
+        (DecodeBudget 1 maximumTypeNodes)
+        (getFrozenTerm 0)
+        (frozenTermBytes application)
+        `shouldSatisfy` Either.isLeft
+      runImageGetFromBytes
+        (DecodeBudget maximumTermNodes 1)
+        (getFrozenType 0)
+        (frozenTypeBytes $ FTApp intType intType)
+        `shouldSatisfy` Either.isLeft
+
+    it "rejects encoded programs that cannot run as IO ()" do
+      let program =
+            FrozenProgram "x.hell" (Text.pack Info.os) (Text.pack Info.arch) "ghc" $
+              FPrim (FTCon $ typeRepKey $ typeRep @()) FPUnit []
+      encodeProgramChecked program `shouldSatisfy` \case
+        Left InvalidLinkedProgram {} -> True
+        _ -> False
+
+    it "atomically preserves an existing no-force destination" do
+      Temp.withSystemTempDirectory "hell-image-install" \directory -> do
+        let temporary = directory FilePath.</> "temporary"
+            output = directory FilePath.</> "output"
+        S8.writeFile temporary "new"
+        S8.writeFile output "old"
+        result <- Exception.try @Exit.ExitCode $ installExecutable False temporary output
+        result `shouldBe` Left (Exit.ExitFailure 1)
+        S8.readFile output `shouldReturn` "old"
+
+    it "preserves exact Double bit patterns" do
+      let bits = 0x7ff8000000000042
+      case getFrozenPrimitiveFromBytes $ frozenPrimitiveBytes $ FPDoubleBits bits of
+        Right (FPDoubleBits actual) -> actual `shouldBe` bits
+        other -> expectationFailure $ show other
+  where
+    frozenPrimitiveBytes = L.toStrict . Put.runPut . putFrozenPrimitive
+    frozenTermBytes = L.toStrict . Put.runPut . putFrozenTerm
+    frozenTypeBytes = L.toStrict . Put.runPut . putFrozenType
+    getIntegerFromBytes = runImageGetFromBytes initialDecodeBudget getInteger
+    runImageGetFromBytes :: DecodeBudget -> ImageGet a -> ByteString -> Either String a
+    runImageGetFromBytes budget decoder bytes =
+      case Get.runGetOrFail (evalStateT decoder budget) $ L.fromStrict bytes of
+        Left (_, _, message) -> Left message
+        Right (trailing, _, value)
+          | L.null trailing -> Right value
+          | otherwise -> Left "trailing bytes"
+    getFrozenPrimitiveFromBytes bytes =
+      runImageGetFromBytes initialDecodeBudget getFrozenPrimitive bytes

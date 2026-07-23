@@ -24,6 +24,7 @@ executable hell
     , aeson
     , async
     , base >=4.17.2.1 && <4.22
+    , binary
     , bytestring
     , case-insensitive
     , constraints
@@ -31,6 +32,7 @@ executable hell
     , criterion
     , criterion-measurement
     , directory
+    , filepath
     , ghc-prim
     , haskell-src-exts
     , hspec
@@ -47,6 +49,7 @@ executable hell
     , these
     , time
     , typed-process
+    , unix
     , unliftio
     , vector
     , wai
@@ -64,6 +67,7 @@ test-suite hell-test
     , aeson
     , async
     , base >=4.17.2.1 && <4.22
+    , binary
     , bytestring
     , case-insensitive
     , constraints
@@ -71,6 +75,7 @@ test-suite hell-test
     , criterion
     , criterion-measurement
     , directory
+    , filepath
     , ghc-prim
     , haskell-src-exts
     , hspec
@@ -87,6 +92,7 @@ test-suite hell-test
     , these
     , time
     , typed-process
+    , unix
     , unliftio
     , vector
     , wai

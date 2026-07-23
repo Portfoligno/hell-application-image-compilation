@@ -11,11 +11,14 @@ dependencies:
 - containers
 - text
 - bytestring
+- binary
 - async
 - criterion-measurement
 - criterion
 - mtl
 - directory
+- filepath
+- unix
 - syb
 - constraints
 - typed-process
