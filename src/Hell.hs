@@ -124,6 +124,7 @@ import Options.Applicative (Parser)
 import qualified Options.Applicative as Options
 import qualified System.Directory as Dir
 import System.Environment
+import qualified System.Environment as Env
 import qualified System.Exit as Exit
 import qualified System.FilePath as FilePath
 import qualified System.Info as Info
@@ -149,6 +150,7 @@ data Command
   | Check FilePath StatsEnabled
   | CompileImage FilePath FilePath Bool StatsEnabled
   | Version
+  | BuildInfo
 
 data StatsEnabled = NoStats | PrintStats Int
 
@@ -183,20 +185,33 @@ commandParser =
         <$> Options.strOption (Options.long "check" <> Options.metavar "FILE" <> Options.help "Typecheck the given .hell file")
         <*> Options.flag NoStats (PrintStats 0) (Options.long "compiler-stats" <> Options.internal),
       CompileImage
-        <$> Options.strOption (Options.long "compile" <> Options.metavar "FILE" <> Options.help "Emit a self-contained executable with a pre-inferred program image")
+        <$> Options.strOption (Options.long "compile" <> Options.metavar "FILE" <> Options.help "Emit a Linux executable by copying this runtime and embedding a pre-inferred program image")
         <*> Options.strOption (Options.short 'o' <> Options.long "output" <> Options.metavar "FILE" <> Options.help "Output executable")
         <*> Options.switch (Options.long "force" <> Options.help "Replace an existing output file")
         <*> Options.flag NoStats (PrintStats 0) (Options.long "compiler-stats" <> Options.internal),
-      Version <$ Options.flag () () (Options.long "version" <> Options.help "Print the version")
+      Version <$ Options.flag () () (Options.long "version" <> Options.help "Print the version"),
+      BuildInfo
+        <$ Options.option
+          (Options.eitherReader $ \value -> if value == "json" then Right () else Left "expected json")
+          (Options.long "build-info" <> Options.metavar "json" <> Options.help "Print structured build information")
     ]
 
 -- | Version of Hell.
 hellVersion :: Text
 hellVersion = "2026-05-29"
 
+applicationImageFeatureName :: Text
+applicationImageFeatureName = "Application Image Compilation"
+
+applicationImageFeatureVersion :: Text
+applicationImageFeatureVersion = "1.0.0"
+
 -- | Dispatch on the command.
 dispatch :: Command -> IO ()
-dispatch Version = Text.putStrLn hellVersion
+dispatch Version =
+  Text.putStrLn $
+    "Hell " <> hellVersion <> " — " <> applicationImageFeatureName <> " " <> applicationImageFeatureVersion
+dispatch BuildInfo = printBuildInfo
 dispatch (Run filePath) = do
   action <- compileFile NoStats filePath
   eval () action
@@ -319,11 +334,18 @@ data ImageError
   | IntegerLiteralOutOfRange Integer
   | UnsupportedImageFormat Word16
   | UnsupportedImageFlags Word16
-  | InvalidFooterSize Word32
+  | InvalidFrameSize Word32
+  | InvalidImageIdentity
+  | MissingImageFrame Text
+  | InconsistentImageFrames
+  | UnexpectedImageData
   | PayloadTooLarge Word64
   | InvalidPayloadLength Word64
   | PayloadChecksumMismatch
   | RuntimeAbiMismatch Word64 Word64
+  | BuildIdentityMismatch Word64 Word64
+  | CompilerVersionMismatch Text Text
+  | ResourceBudgetExceeded Text
   | DecodeFailure Word64 Text
   | TrailingPayloadBytes Word64
   | OutputAlreadyExists FilePath
@@ -336,39 +358,95 @@ data SelfImage
   = NoImage
   | LoadedImage FrozenProgram
   | InvalidImage ImageError
+  deriving (Show)
 
 imageFormatVersion :: Word16
-imageFormatVersion = 1
+imageFormatVersion = 2
 
 imageAbiVersion :: Word32
-imageAbiVersion = 1
+imageAbiVersion = 2
 
-imageFooterSize :: Word32
-imageFooterSize = 48
+imageFrameSize :: Word32
+imageFrameSize = 64
 
-imageFooterMagic :: ByteString
-imageFooterMagic = "HELL-IMAGE-V1\0\0\0"
+imageStartMagic, imageEndMagic :: ByteString
+imageStartMagic = "HELL-IMG-START2\0"
+imageEndMagic = "HELL-IMG--END2\0\0"
 
-maximumPayloadSize, maximumTextSize :: Word64
+-- These three independent slots are part of the copied runtime prefix. During
+-- emission they are patched in place. The reversed seeds below let a generated
+-- runtime reconstruct both states without retaining an unpatched slot literal.
+{-# NOINLINE imageIdentitySlots #-}
+imageIdentitySlots :: [ByteString]
+imageIdentitySlots =
+  [ "HELL-AIC-PLAIN-SLOT-ONE-000001",
+    "HELL-AIC-PLAIN-SLOT-TWO-000002",
+    "HELL-AIC-PLAIN-SLOT-THR-000003"
+  ]
+
+{-# NOINLINE plainImageIdentityMarkers #-}
+plainImageIdentityMarkers :: [ByteString]
+plainImageIdentityMarkers =
+  map
+    S8.reverse
+    [ "100000-ENO-TOLS-NIALP-CIA-LLEH",
+      "200000-OWT-TOLS-NIALP-CIA-LLEH",
+      "300000-RHT-TOLS-NIALP-CIA-LLEH"
+    ]
+
+requiredImageIdentityMarkers :: [ByteString]
+requiredImageIdentityMarkers = map (ByteString.map (`xor` 0x5a)) plainImageIdentityMarkers
+
+maximumPayloadSize, maximumTextSize, maximumTotalTextBytes :: Word64
 maximumPayloadSize = 64 * 1024 * 1024
-maximumTextSize = 16 * 1024 * 1024
+maximumTextSize = 1 * 1024 * 1024
+maximumTotalTextBytes = 8 * 1024 * 1024
 
-maximumListLength :: Word32
+maximumListLength, maximumTotalListElements :: Word32
 maximumListLength = 100 * 1024
+maximumTotalListElements = 200 * 1024
 
 maximumImageDepth :: Int
-maximumImageDepth = 4096
+maximumImageDepth = 256
 
-maximumTermNodes, maximumTypeNodes :: Word32
+maximumTermNodes, maximumTypeNodes, maximumDecodedNodes :: Word32
 maximumTermNodes = 100 * 1024
 maximumTypeNodes = 500 * 1024
+maximumDecodedNodes = 700 * 1024
 
-data DecodeBudget = DecodeBudget !Word32 !Word32
+maximumBindings, maximumSymbols, maximumThawNodes, maximumLinkNodes :: Word32
+maximumBindings = 100 * 1024
+maximumSymbols = 100 * 1024
+maximumThawNodes = 700 * 1024
+maximumLinkNodes = 200 * 1024
+
+maximumRuntimePrefixSize :: Int
+maximumRuntimePrefixSize = 256 * 1024 * 1024
+
+data DecodeBudget = DecodeBudget
+  { remainingTermNodes :: !Word32,
+    remainingTypeNodes :: !Word32,
+    remainingDecodedNodes :: !Word32,
+    remainingTextBytes :: !Word64,
+    remainingListElements :: !Word32,
+    remainingBindings :: !Word32,
+    remainingSymbols :: !Word32
+  }
+  deriving (Eq, Show)
 
 type ImageGet = StateT DecodeBudget Get.Get
 
 initialDecodeBudget :: DecodeBudget
-initialDecodeBudget = DecodeBudget maximumTermNodes maximumTypeNodes
+initialDecodeBudget =
+  DecodeBudget
+    { remainingTermNodes = maximumTermNodes,
+      remainingTypeNodes = maximumTypeNodes,
+      remainingDecodedNodes = maximumDecodedNodes,
+      remainingTextBytes = maximumTotalTextBytes,
+      remainingListElements = maximumTotalListElements,
+      remainingBindings = maximumBindings,
+      remainingSymbols = maximumSymbols
+    }
 
 -- | Source labels, spans, schemas, and live closures are deliberately absent.
 freezeProgram :: FilePath -> UTerm SomeTypeRep -> Either ImageError FrozenProgram
@@ -498,9 +576,66 @@ collectTypeConstructorLeaves someRep@(SomeTypeRep rep) =
         <> collectTypeConstructorLeaves (SomeTypeRep x)
     Type.Con {} -> [someRep]
 
+type TraversalBudget = StateT Word32 (Either ImageError)
+
+consumeTraversalNode :: Text -> TraversalBudget ()
+consumeTraversalNode label = do
+  remaining <- get
+  when (remaining == 0) $ lift $ Left $ ResourceBudgetExceeded label
+  put $ remaining - 1
+
+ensureTraversalDepth :: Text -> Int -> TraversalBudget ()
+ensureTraversalDepth label depth =
+  when (depth > maximumImageDepth) $ lift $ Left $ ResourceBudgetExceeded label
+
+validateFrozenForThaw :: FrozenProgram -> Either ImageError ()
+validateFrozenForThaw FrozenProgram {frozenMainTerm} =
+  evalStateT (checkTerm 0 frozenMainTerm) maximumThawNodes
+  where
+    checkTerm depth term = do
+      ensureTraversalDepth "thaw depth" depth
+      consumeTraversalNode "thaw nodes"
+      case term of
+        FVar ty _ -> checkType (depth + 1) ty
+        FLam ty _ body -> checkType (depth + 1) ty >> checkTerm (depth + 1) body
+        FApp ty f x -> checkType (depth + 1) ty >> checkTerm (depth + 1) f >> checkTerm (depth + 1) x
+        FPrim ty _ args -> checkType (depth + 1) ty >> traverse_ (checkType $ depth + 1) args
+    checkType depth ty = do
+      ensureTraversalDepth "thaw depth" depth
+      consumeTraversalNode "thaw nodes"
+      case ty of
+        FTCon {} -> pure ()
+        FTSymbol {} -> pure ()
+        FTApp f x -> checkType (depth + 1) f >> checkType (depth + 1) x
+        FTFun a b -> checkType (depth + 1) a >> checkType (depth + 1) b
+
+validateTermForLink :: UTerm SomeTypeRep -> Either ImageError ()
+validateTermForLink = validateTermForLinkWithBudget maximumLinkNodes
+
+validateTermForLinkWithBudget :: Word32 -> UTerm SomeTypeRep -> Either ImageError ()
+validateTermForLinkWithBudget budget term = evalStateT (go 0 term) budget
+  where
+    go depth current = do
+      ensureTraversalDepth "link depth" depth
+      consumeTraversalNode "link nodes"
+      case current of
+        UVar {} -> pure ()
+        ULam _ _ _ _ body -> go (depth + 1) body
+        UApp _ _ f x -> go (depth + 1) f >> go (depth + 1) x
+        USig _ _ body _ -> go (depth + 1) body
+        UForall {} -> pure ()
+
 thawProgram :: FrozenProgram -> Either ImageError (UTerm SomeTypeRep)
-thawProgram FrozenProgram {frozenMainTerm} =
+thawProgram program@FrozenProgram {frozenMainTerm} = do
+  validateFrozenForThaw program
   thawTerm (frozenSymbols frozenMainTerm) frozenMainTerm
+
+linkFrozenMain :: UTerm SomeTypeRep -> Either ImageError (Term () (IO ()))
+linkFrozenMain inferred = do
+  validateTermForLink inferred
+  case linkMain inferred of
+    Left err -> Left $ InvalidLinkedProgram $ Text.pack err
+    Right action -> Right action
 
 frozenSymbols :: FrozenTerm -> Map TyConKey SomeTypeRep
 frozenSymbols term =
@@ -612,10 +747,17 @@ encodeProgramChecked program = do
 validateProgramPayload :: ByteString -> Either ImageError FrozenProgram
 validateProgramPayload payload = do
   frozen <- decodeProgram payload
+  validateFrozenCompiler frozen
   inferred <- thawProgram frozen
-  case linkMain inferred of
-    Left err -> Left $ InvalidLinkedProgram $ Text.pack err
-    Right _ -> Right frozen
+  _ <- linkFrozenMain inferred
+  Right frozen
+
+validateFrozenCompiler :: FrozenProgram -> Either ImageError ()
+validateFrozenCompiler FrozenProgram {frozenCompilerVersion}
+  | frozenCompilerVersion == expected = Right ()
+  | otherwise = Left $ CompilerVersionMismatch expected frozenCompilerVersion
+  where
+    expected = Text.pack $ showVersion Info.compilerVersion
 
 decodeProgram :: ByteString -> Either ImageError FrozenProgram
 decodeProgram bytes
@@ -665,7 +807,9 @@ putFrozenBinding = \case
   FTuple names -> Put.putWord8 1 >> putList putText names
 
 getFrozenBinding :: ImageGet FrozenBinding
-getFrozenBinding =
+getFrozenBinding = do
+  consumeBinding
+  consumeDecodedNode
   lift Get.getWord8 >>= \case
     0 -> FSingleton <$> getText
     1 -> FTuple <$> getList getText
@@ -682,7 +826,8 @@ putFrozenPrimitive = \case
   FPSSymbol symbol -> Put.putWord8 6 >> putText symbol
 
 getFrozenPrimitive :: ImageGet FrozenPrimitive
-getFrozenPrimitive =
+getFrozenPrimitive = do
+  consumeDecodedNode
   lift Get.getWord8 >>= \case
     0 -> FPName <$> getText
     1 -> do
@@ -694,7 +839,7 @@ getFrozenPrimitive =
     3 -> FPInt <$> getInteger
     4 -> FPDoubleBits <$> lift Get.getWord64be
     5 -> pure FPUnit
-    6 -> FPSSymbol <$> getText
+    6 -> consumeSymbol >> FPSSymbol <$> getText
     tag -> fail $ "unknown FrozenPrimitive tag " <> show tag
 
 putFrozenType :: FrozenType -> Put.Put
@@ -713,7 +858,7 @@ getFrozenType depth = do
     0 -> FTCon <$> (TyConKey <$> getText <*> getText <*> getText)
     1 -> FTApp <$> getFrozenType (depth + 1) <*> getFrozenType (depth + 1)
     2 -> FTFun <$> getFrozenType (depth + 1) <*> getFrozenType (depth + 1)
-    3 -> FTSymbol <$> getText
+    3 -> consumeSymbol >> FTSymbol <$> getText
     tag -> fail $ "unknown FrozenType tag " <> show tag
 
 putText :: Text -> Put.Put
@@ -726,6 +871,7 @@ getText :: ImageGet Text
 getText = do
   length' <- lift Get.getWord32be
   when (fromIntegral length' > maximumTextSize) $ fail "text field exceeds limit"
+  consumeTextBytes $ fromIntegral length'
   bytes <- lift $ Get.getByteString $ fromIntegral length'
   either (fail . show) pure $ Text.decodeUtf8' bytes
 
@@ -738,6 +884,7 @@ getList :: ImageGet a -> ImageGet [a]
 getList getItem = do
   count <- lift Get.getWord32be
   when (count > maximumListLength) $ fail "list exceeds limit"
+  consumeListElements count
   replicateM (fromIntegral count) getItem
 
 putInteger :: Integer -> Put.Put
@@ -771,92 +918,406 @@ ensureDepth depth = when (depth > maximumImageDepth) $ fail "image nesting excee
 
 consumeTermNode :: ImageGet ()
 consumeTermNode = do
-  DecodeBudget terms types <- get
-  when (terms == 0) $ fail "term node budget exceeded"
-  put $ DecodeBudget (terms - 1) types
+  budget <- get
+  when (budget.remainingTermNodes == 0) $ fail "term node budget exceeded"
+  put budget {remainingTermNodes = budget.remainingTermNodes - 1}
+  consumeDecodedNode
 
 consumeTypeNode :: ImageGet ()
 consumeTypeNode = do
-  DecodeBudget terms types <- get
-  when (types == 0) $ fail "type node budget exceeded"
-  put $ DecodeBudget terms (types - 1)
+  budget <- get
+  when (budget.remainingTypeNodes == 0) $ fail "type node budget exceeded"
+  put budget {remainingTypeNodes = budget.remainingTypeNodes - 1}
+  consumeDecodedNode
+
+consumeDecodedNode :: ImageGet ()
+consumeDecodedNode = do
+  budget <- get
+  when (budget.remainingDecodedNodes == 0) $ fail "decoded node budget exceeded"
+  put budget {remainingDecodedNodes = budget.remainingDecodedNodes - 1}
+
+consumeTextBytes :: Word64 -> ImageGet ()
+consumeTextBytes count = do
+  budget <- get
+  when (count > budget.remainingTextBytes) $ fail "total text byte budget exceeded"
+  put budget {remainingTextBytes = budget.remainingTextBytes - count}
+
+consumeListElements :: Word32 -> ImageGet ()
+consumeListElements count = do
+  budget <- get
+  when (count > budget.remainingListElements) $ fail "total list element budget exceeded"
+  put budget {remainingListElements = budget.remainingListElements - count}
+
+consumeBinding :: ImageGet ()
+consumeBinding = do
+  budget <- get
+  when (budget.remainingBindings == 0) $ fail "binding budget exceeded"
+  put budget {remainingBindings = budget.remainingBindings - 1}
+
+consumeSymbol :: ImageGet ()
+consumeSymbol = do
+  budget <- get
+  when (budget.remainingSymbols == 0) $ fail "symbol budget exceeded"
+  put budget {remainingSymbols = budget.remainingSymbols - 1}
 
 fnv1a64 :: ByteString -> Word64
 fnv1a64 = ByteString.foldl' (\hash byte -> (hash `xor` fromIntegral byte) * 1099511628211) 14695981039346656037
 
-runtimeAbiFingerprint :: Word64
-runtimeAbiFingerprint =
+imageCompatibilityManifest :: Text
+imageCompatibilityManifest =
+  Text.unlines $
+    [ "frozen-program:text-source,text-os,text-arch,text-ghc,term",
+      "term:0=var,1=lam,2=app,3=prim",
+      "binding:0=singleton,1=tuple",
+      "primitive:0=name,1=char,2=text,3=int,4=double-bits,5=unit,6=symbol",
+      "type:0=constructor,1=application,2=function,3=symbol",
+      "integer:sign-byte,big-endian-width,big-endian-canonical-magnitude",
+      "relink:registered-types,registered-primitives,typed-check,io-unit"
+    ]
+      <> [ "literal:" <> Text.pack name <> ":" <> Text.pack (show rep)
+           | (name, (_, rep)) <- Map.toAscList supportedLits
+         ]
+      <> [ "polymorphic:"
+             <> Text.pack name
+             <> ":"
+             <> Text.pack (show $ fmap normalise schema)
+           | (name, (_, vars, schema, _)) <- Map.toAscList polyLits,
+             let normalise unique = Maybe.fromMaybe (-1) $ List.elemIndex unique vars
+         ]
+      <> [ "type-constructor:" <> Text.pack (show key)
+           | key <- Map.keys typeRegistry
+         ]
+      <> [ "instance:" <> Text.pack (show key)
+           | key <- Map.keys instances.getInstances
+         ]
+
+imageCompatibilityFingerprint :: Word64
+imageCompatibilityFingerprint = fnv1a64 $ Text.encodeUtf8 imageCompatibilityManifest
+
+runtimeAbiFingerprint :: Text -> Word64
+runtimeAbiFingerprint = runtimeAbiFingerprintWith imageCompatibilityFingerprint
+
+runtimeAbiFingerprintWith :: Word64 -> Text -> Word64
+runtimeAbiFingerprintWith compatibilityFingerprint linkage =
   fnv1a64 $
     Text.encodeUtf8 $
       Text.intercalate
         "\0"
         [ Text.pack $ show imageAbiVersion,
           hellVersion,
+          applicationImageFeatureName,
+          applicationImageFeatureVersion,
           Text.pack $ showVersion Info.compilerVersion,
           Text.pack Info.os,
           Text.pack Info.arch,
-          Text.pack $ show imageFormatVersion
+          linkage,
+          Text.pack $ show imageFormatVersion,
+          Text.pack $ showHex compatibilityFingerprint "",
+          "typed-relink-v1"
         ]
 
-putFooter :: Word64 -> Word64 -> Put.Put
-putFooter payloadLength checksum = do
-  Put.putByteString imageFooterMagic
+buildIdentity :: Text -> Text
+buildIdentity linkage =
+  Text.concat
+    [ "application-image-compilation-",
+      applicationImageFeatureVersion,
+      "-f",
+      Text.pack $ show imageFormatVersion,
+      "-a",
+      Text.pack $ show imageAbiVersion,
+      "-",
+      Text.pack $ showHex (runtimeAbiFingerprint linkage) ""
+    ]
+
+buildIdentityFingerprint :: Text -> Word64
+buildIdentityFingerprint = fnv1a64 . Text.encodeUtf8 . buildIdentity
+
+data ImageFrame = ImageFrame
+  { frameMagic :: !ByteString,
+    frameFormat :: !Word16,
+    frameFlags :: !Word16,
+    frameSize :: !Word32,
+    framePrefixLength :: !Word64,
+    framePayloadLength :: !Word64,
+    framePayloadChecksum :: !Word64,
+    frameRuntimeAbi :: !Word64,
+    frameBuildIdentity :: !Word64
+  }
+  deriving (Eq, Show)
+
+putImageFrame :: ByteString -> Word64 -> Word64 -> Word64 -> Text -> Put.Put
+putImageFrame magic prefixLength payloadLength checksum linkage = do
+  Put.putByteString magic
   Put.putWord16be imageFormatVersion
   Put.putWord16be 0
-  Put.putWord32be imageFooterSize
+  Put.putWord32be imageFrameSize
+  Put.putWord64be prefixLength
   Put.putWord64be payloadLength
   Put.putWord64be checksum
-  Put.putWord64be runtimeAbiFingerprint
+  Put.putWord64be $ runtimeAbiFingerprint linkage
+  Put.putWord64be $ buildIdentityFingerprint linkage
 
-getFooter :: Get.Get (Word64, Word64, Word64)
-getFooter = do
-  magic <- Get.getByteString 16
-  when (magic /= imageFooterMagic) $ fail "invalid image footer magic"
-  version <- Get.getWord16be
-  when (version /= imageFormatVersion) $ fail $ "unsupported image version " <> show version
-  flags <- Get.getWord16be
-  when (flags /= 0) $ fail $ "unsupported image flags " <> show flags
-  footerSize <- Get.getWord32be
-  when (footerSize /= imageFooterSize) $ fail $ "invalid footer size " <> show footerSize
-  (,,) <$> Get.getWord64be <*> Get.getWord64be <*> Get.getWord64be
+getImageFrame :: Get.Get ImageFrame
+getImageFrame =
+  ImageFrame
+    <$> Get.getByteString 16
+    <*> Get.getWord16be
+    <*> Get.getWord16be
+    <*> Get.getWord32be
+    <*> Get.getWord64be
+    <*> Get.getWord64be
+    <*> Get.getWord64be
+    <*> Get.getWord64be
+    <*> Get.getWord64be
+
+decodeImageFrame :: Text -> ByteString -> Either ImageError ImageFrame
+decodeImageFrame label bytes
+  | ByteString.length bytes /= fromIntegral imageFrameSize = Left $ MissingImageFrame label
+  | otherwise =
+      case Get.runGetOrFail getImageFrame $ L.fromStrict bytes of
+        Left _ -> Left $ MissingImageFrame label
+        Right (trailing, _, frame)
+          | not (L.null trailing) -> Left UnexpectedImageData
+          | frame.frameFormat /= imageFormatVersion -> Left $ UnsupportedImageFormat frame.frameFormat
+          | frame.frameFlags /= 0 -> Left $ UnsupportedImageFlags frame.frameFlags
+          | frame.frameSize /= imageFrameSize -> Left $ InvalidFrameSize frame.frameSize
+          | otherwise -> Right frame
+
+countOccurrences :: ByteString -> ByteString -> Int
+countOccurrences needle = go 0
+  where
+    go !count haystack
+      | ByteString.null needle = count
+      | otherwise =
+          let (_, remainder) = ByteString.breakSubstring needle haystack
+           in if ByteString.null remainder
+                then count
+                else go (count + 1) $ ByteString.drop (ByteString.length needle) remainder
+
+replaceUnique :: ByteString -> ByteString -> ByteString -> Either ImageError ByteString
+replaceUnique needle replacement haystack =
+  case ByteString.breakSubstring needle haystack of
+    (_, rest) | ByteString.null rest -> Left InvalidImageIdentity
+    (prefix, rest) ->
+      let suffix = ByteString.drop (ByteString.length needle) rest
+       in if countOccurrences needle suffix /= 0
+            then Left InvalidImageIdentity
+            else Right $ prefix <> replacement <> suffix
+
+patchRuntimeIdentity :: ByteString -> Either ImageError ByteString
+patchRuntimeIdentity runtime = do
+  when (map ByteString.length imageIdentitySlots /= map ByteString.length plainImageIdentityMarkers) $
+    Left InvalidImageIdentity
+  foldM
+    (\bytes (plain, required) -> replaceUnique plain required bytes)
+    runtime
+    (zip plainImageIdentityMarkers requiredImageIdentityMarkers)
+
+data RuntimeImageIdentity = PlainRuntime | ImageRequired
+
+classifyRuntimeImageIdentity :: ByteString -> Either ImageError RuntimeImageIdentity
+classifyRuntimeImageIdentity bytes =
+  let anchorLength = sum $ map ByteString.length imageIdentitySlots
+      plainCounts = map (`countOccurrences` bytes) plainImageIdentityMarkers
+      requiredCounts = map (`countOccurrences` bytes) requiredImageIdentityMarkers
+   in anchorLength `seq`
+        if all (== 1) plainCounts && all (== 0) requiredCounts
+          then Right PlainRuntime
+          else
+            if all (== 0) plainCounts && all (== 1) requiredCounts
+              then Right ImageRequired
+              else Left InvalidImageIdentity
+
+encodeImageFrame :: ByteString -> Word64 -> Word64 -> Word64 -> Text -> ByteString
+encodeImageFrame magic prefixLength payloadLength checksum =
+  L.toStrict . Put.runPut . putImageFrame magic prefixLength payloadLength checksum
+
+assembleImageBytes :: ByteString -> ByteString -> Either ImageError ByteString
+assembleImageBytes runtime payload = do
+  when (fromIntegral (ByteString.length payload) > maximumPayloadSize) $
+    Left $ PayloadTooLarge $ fromIntegral $ ByteString.length payload
+  patchedRuntime <- patchRuntimeIdentity runtime
+  let prefixLength = fromIntegral $ ByteString.length patchedRuntime
+      payloadLength = fromIntegral $ ByteString.length payload
+      checksum = fnv1a64 payload
+      linkage = detectExecutableLinkage runtime
+      start = encodeImageFrame imageStartMagic prefixLength payloadLength checksum linkage
+      end = encodeImageFrame imageEndMagic prefixLength payloadLength checksum linkage
+  pure $ patchedRuntime <> start <> payload <> end
+
+loadImageFromBytes :: ByteString -> SelfImage
+loadImageFromBytes bytes =
+  let endCandidate = probeEndFrame bytes
+      identityRegion =
+        case endCandidate of
+          Just frame
+            | frame.framePrefixLength <= fromIntegral (min maximumRuntimePrefixSize $ ByteString.length bytes) ->
+                ByteString.take (fromIntegral frame.framePrefixLength) bytes
+          _ -> ByteString.take maximumRuntimePrefixSize bytes
+   in case classifyRuntimeImageIdentity identityRegion of
+    Left err -> InvalidImage err
+    Right PlainRuntime ->
+      case endCandidate of
+        Nothing -> NoImage
+        Just _ -> InvalidImage InvalidImageIdentity
+    Right ImageRequired ->
+      either InvalidImage id do
+        let totalLength = ByteString.length bytes
+            frameLength = fromIntegral imageFrameSize
+        when (totalLength < frameLength * 2) $ Left $ MissingImageFrame "end"
+        endFrame <-
+          decodeImageFrame "end" $
+            ByteString.drop (totalLength - frameLength) bytes
+        when (endFrame.frameMagic /= imageEndMagic) $ Left $ MissingImageFrame "end"
+        when (endFrame.framePayloadLength > maximumPayloadSize) $
+          Left $ PayloadTooLarge endFrame.framePayloadLength
+        let expectedLength =
+              toInteger endFrame.framePrefixLength
+                + toInteger imageFrameSize
+                + toInteger endFrame.framePayloadLength
+                + toInteger imageFrameSize
+        when (expectedLength /= toInteger totalLength) $ Left UnexpectedImageData
+        let prefixLength = fromIntegral endFrame.framePrefixLength
+            payloadLength = fromIntegral endFrame.framePayloadLength
+            startBytes = ByteString.take frameLength $ ByteString.drop prefixLength bytes
+            payload = ByteString.take payloadLength $ ByteString.drop (prefixLength + frameLength) bytes
+        startFrame <- decodeImageFrame "start" startBytes
+        when (startFrame.frameMagic /= imageStartMagic) $ Left $ MissingImageFrame "start"
+        when (startFrame {frameMagic = imageEndMagic} /= endFrame) $ Left InconsistentImageFrames
+        let linkage = detectExecutableLinkage $ ByteString.take prefixLength bytes
+            expectedAbi = runtimeAbiFingerprint linkage
+            expectedBuild = buildIdentityFingerprint linkage
+        when (endFrame.frameRuntimeAbi /= expectedAbi) $
+          Left $ RuntimeAbiMismatch expectedAbi endFrame.frameRuntimeAbi
+        when (endFrame.frameBuildIdentity /= expectedBuild) $
+          Left $ BuildIdentityMismatch expectedBuild endFrame.frameBuildIdentity
+        when (ByteString.length payload /= payloadLength) $
+          Left $ InvalidPayloadLength endFrame.framePayloadLength
+        when (fnv1a64 payload /= endFrame.framePayloadChecksum) $
+          Left PayloadChecksumMismatch
+        LoadedImage <$> decodeProgram payload
+
+probeEndFrame :: ByteString -> Maybe ImageFrame
+probeEndFrame bytes = do
+  let frameLength = fromIntegral imageFrameSize
+  guard $ ByteString.length bytes >= frameLength
+  case Get.runGetOrFail getImageFrame $
+    L.fromStrict $
+      ByteString.drop (ByteString.length bytes - frameLength) bytes of
+    Right (trailing, _, frame)
+      | L.null trailing,
+        frame.frameMagic == imageEndMagic ->
+          Just frame
+    _ -> Nothing
 
 loadSelfImage :: IO SelfImage
-loadSelfImage = getExecutablePath >>= loadImageFromPath
-
-loadImageFromPath :: FilePath -> IO SelfImage
-loadImageFromPath path =
+loadSelfImage =
   Exception.handle
     (\(err :: Exception.IOException) -> pure $ InvalidImage $ DecodeFailure 0 $ Text.pack $ show err)
-    $ IO.withBinaryFile path IO.ReadMode \handle -> do
-      fileSize <- IO.hFileSize handle
-      if fileSize < fromIntegral imageFooterSize
-        then pure NoImage
-        else do
-          IO.hSeek handle IO.AbsoluteSeek $ fileSize - fromIntegral imageFooterSize
-          footer <- ByteString.hGet handle $ fromIntegral imageFooterSize
-          if ByteString.take 16 footer /= imageFooterMagic
-            then pure NoImage
-            else case Get.runGetOrFail getFooter (L.fromStrict footer) of
-              Left (_, offset, message) ->
-                pure $ InvalidImage $ DecodeFailure (fromIntegral offset) $ Text.pack message
-              Right (trailing, _, (payloadLength, checksum, abi))
-                | not (L.null trailing) -> pure $ InvalidImage $ TrailingPayloadBytes 0
-                | payloadLength > maximumPayloadSize -> pure $ InvalidImage $ PayloadTooLarge payloadLength
-                | payloadLength > fromIntegral fileSize - fromIntegral imageFooterSize ->
-                    pure $ InvalidImage $ InvalidPayloadLength payloadLength
-                | abi /= runtimeAbiFingerprint ->
-                    pure $ InvalidImage $ RuntimeAbiMismatch runtimeAbiFingerprint abi
-                | otherwise -> do
-                    let payloadStart =
-                          fileSize - fromIntegral imageFooterSize - fromIntegral payloadLength
-                    IO.hSeek handle IO.AbsoluteSeek payloadStart
-                    payload <- ByteString.hGet handle $ fromIntegral payloadLength
-                    if fromIntegral (ByteString.length payload) /= payloadLength
-                      then pure $ InvalidImage $ InvalidPayloadLength payloadLength
-                      else
-                        if fnv1a64 payload /= checksum
-                          then pure $ InvalidImage PayloadChecksumMismatch
-                          else pure $ either InvalidImage LoadedImage $ decodeProgram payload
+    $ loadImageFromBytes <$> readSelfExecutable
+
+readSelfExecutable :: IO ByteString
+readSelfExecutable = do
+  path <- if Info.os == "linux" then pure "/proc/self/exe" else getExecutablePath
+  ByteString.readFile path
+
+detectExecutableLinkage :: ByteString -> Text
+detectExecutableLinkage bytes =
+  case elfHasInterpreter bytes of
+    Just True -> "dynamic"
+    Just False -> "static"
+    Nothing -> "unknown"
+
+elfHasInterpreter :: ByteString -> Maybe Bool
+elfHasInterpreter bytes = do
+  guard $ ByteString.take 4 bytes == "\x7f\&ELF"
+  elfClass <- byteAt 4
+  byteOrder <- byteAt 5
+  let get16 = case byteOrder of
+        1 -> word16At Get.getWord16le
+        2 -> word16At Get.getWord16be
+        _ -> const Nothing
+      get32 = case byteOrder of
+        1 -> word32At Get.getWord32le
+        2 -> word32At Get.getWord32be
+        _ -> const Nothing
+      get64 = case byteOrder of
+        1 -> word64At Get.getWord64le
+        2 -> word64At Get.getWord64be
+        _ -> const Nothing
+  (programOffset, entrySize, entryCount) <- case elfClass of
+    1 -> (,,) . fromIntegral <$> get32 28 <*> get16 42 <*> get16 44
+    2 -> (,,) <$> get64 32 <*> get16 54 <*> get16 56
+    _ -> Nothing
+  guard $ entrySize >= 4
+  let offsets =
+        [ toInteger programOffset + index * toInteger entrySize
+          | index <- [0 .. toInteger entryCount - 1]
+        ]
+      programTypes =
+        [ get32 offset
+          | offsetInteger <- offsets,
+            offsetInteger <= toInteger (maxBound :: Int),
+            let offset = fromInteger offsetInteger
+        ]
+  guard $ length programTypes == fromIntegral entryCount
+  types <- sequence programTypes
+  pure $ 3 `elem` types
+  where
+    byteAt offset =
+      if offset < ByteString.length bytes
+        then Just $ ByteString.index bytes offset
+        else Nothing
+    word16At getter offset
+      | offset + 2 <= ByteString.length bytes =
+          Just $ Get.runGet getter $ L.fromStrict $ ByteString.take 2 $ ByteString.drop offset bytes
+      | otherwise = Nothing
+    word32At getter offset
+      | offset + 4 <= ByteString.length bytes =
+          Just $ Get.runGet getter $ L.fromStrict $ ByteString.take 4 $ ByteString.drop offset bytes
+      | otherwise = Nothing
+    word64At getter offset
+      | offset + 8 <= ByteString.length bytes =
+          Just $ Get.runGet getter $ L.fromStrict $ ByteString.take 8 $ ByteString.drop offset bytes
+      | otherwise = Nothing
+
+printBuildInfo :: IO ()
+printBuildInfo = do
+  runtime <- readSelfExecutable
+  let linkage = detectExecutableLinkage runtime
+      output =
+        Json.object
+          [ "baseline"
+              Json..= Json.object
+                [ "name" Json..= ("Hell" :: Text),
+                  "version" Json..= hellVersion
+                ],
+            "feature"
+              Json..= Json.object
+                [ "name" Json..= applicationImageFeatureName,
+                  "version" Json..= applicationImageFeatureVersion
+                ],
+            "applicationImage"
+              Json..= Json.object
+                [ "formatVersion" Json..= imageFormatVersion,
+                  "abiVersion" Json..= imageAbiVersion,
+                  "compatibilityFingerprint" Json..= Text.pack (showHex imageCompatibilityFingerprint "")
+                ],
+            "compiler"
+              Json..= Json.object
+                [ "name" Json..= ("GHC" :: Text),
+                  "version" Json..= Text.pack (showVersion Info.compilerVersion)
+                ],
+            "target"
+              Json..= Json.object
+                [ "os" Json..= Text.pack Info.os,
+                  "arch" Json..= Text.pack Info.arch,
+                  "linkage" Json..= linkage
+                ],
+            "buildIdentity" Json..= buildIdentity linkage
+          ]
+  L.hPut IO.stdout $ Json.encode output
+  S8.hPutStrLn IO.stdout ""
 
 runFrozenProgram :: FrozenProgram -> IO ()
 runFrozenProgram frozen
@@ -865,11 +1326,11 @@ runFrozenProgram frozen
   | frozen.frozenTargetArch /= Text.pack Info.arch =
       dieImage $ UnsupportedImageTarget frozen.frozenTargetArch
   | otherwise =
-      case thawProgram frozen of
+      case validateFrozenCompiler frozen >> thawProgram frozen of
         Left err -> dieImage err
         Right inferred ->
-          case linkMain inferred of
-            Left err -> Exit.die $ "hell image: " <> err
+          case linkFrozenMain inferred of
+            Left err -> dieImage err
             Right action -> eval () action
 
 compileImage :: FilePath -> FilePath -> Bool -> StatsEnabled -> IO ()
@@ -890,6 +1351,12 @@ emitExecutable output force payload = do
   case validateProgramPayload payload of
     Left err -> dieImage err
     Right _ -> pure ()
+  runtime <- readSelfExecutable
+  case loadImageFromBytes runtime of
+    NoImage -> pure ()
+    LoadedImage {} -> dieImage EmitterAlreadyContainsImage
+    InvalidImage err -> dieImage err
+  executable <- either dieImage pure $ assembleImageBytes runtime payload
   self <- getExecutablePath >>= Dir.canonicalizePath
   outputAbsolute <- Dir.makeAbsolute output
   let normalizedOutput = FilePath.normalise outputAbsolute
@@ -901,22 +1368,18 @@ emitExecutable output force payload = do
         FilePath.normalise $
           resolvedOutputDirectory FilePath.</> FilePath.takeFileName normalizedOutput
   when (resolvedOutput == FilePath.normalise self) $ dieImage $ RefusingToOverwriteSelf output
-  loadImageFromPath self >>= \case
-    NoImage -> pure ()
-    LoadedImage {} -> dieImage EmitterAlreadyContainsImage
-    InvalidImage err -> dieImage err
   Exception.bracketOnError
     (IO.openBinaryTempFile resolvedOutputDirectory outputTemplate)
     (\(temporary, handle) -> IO.hClose handle `Exception.finally` removeIfPresent temporary)
     \(temporary, handle) -> do
-      IO.withBinaryFile self IO.ReadMode $ \source -> copyHandle source handle
-      ByteString.hPut handle payload
-      L.hPut handle $ Put.runPut $ putFooter (fromIntegral $ ByteString.length payload) (fnv1a64 payload)
+      ByteString.hPut handle executable
       IO.hFlush handle
       IO.hClose handle
-      permissions <- Dir.getPermissions self
-      Dir.setPermissions temporary permissions {Dir.readable = True, Dir.executable = True}
+      setApplicationExecutableMode temporary
       installExecutable force temporary resolvedOutput
+
+setApplicationExecutableMode :: FilePath -> IO ()
+setApplicationExecutableMode path = Posix.setFileMode path 0o755
 
 installExecutable :: Bool -> FilePath -> FilePath -> IO ()
 installExecutable True temporary output = Dir.renameFile temporary output
@@ -928,11 +1391,6 @@ installExecutable False temporary output =
         then dieImage $ OutputAlreadyExists output
         else Exception.throwIO err
 
-copyHandle :: IO.Handle -> IO.Handle -> IO ()
-copyHandle source destination = do
-  chunk <- ByteString.hGetSome source (64 * 1024)
-  unless (ByteString.null chunk) $ ByteString.hPut destination chunk >> copyHandle source destination
-
 removeIfPresent :: FilePath -> IO ()
 removeIfPresent path = do
   exists <- Dir.doesPathExist path
@@ -943,11 +1401,23 @@ dieImage = Exit.die . ("hell image: " <>) . renderImageError
 
 renderImageError :: ImageError -> String
 renderImageError = \case
+  InvalidImageIdentity -> "invalid application-image identity"
+  MissingImageFrame label -> "invalid framing: missing or damaged " <> Text.unpack label <> " frame"
+  InconsistentImageFrames -> "invalid framing: start/end records disagree"
+  UnexpectedImageData -> "invalid framing: unexpected leading, trailing, or truncated data"
+  UnsupportedImageFormat version -> "unsupported image format: " <> show version
+  UnsupportedImageFlags flags -> "unsupported image flags: " <> show flags
+  InvalidFrameSize size -> "invalid frame size: " <> show size
   UnknownPrimitive name -> "unknown primitive: " <> Text.unpack name
   UnknownTypeConstructor key -> "unknown type constructor: " <> show key
   PayloadChecksumMismatch -> "payload checksum mismatch"
   RuntimeAbiMismatch expected actual ->
     "incompatible runtime ABI (expected " <> show expected <> ", got " <> show actual <> ")"
+  BuildIdentityMismatch expected actual ->
+    "incompatible build identity (expected " <> show expected <> ", got " <> show actual <> ")"
+  CompilerVersionMismatch expected actual ->
+    "incompatible GHC runtime (expected " <> Text.unpack expected <> ", got " <> Text.unpack actual <> ")"
+  ResourceBudgetExceeded resource -> "resource budget exceeded: " <> Text.unpack resource
   OutputAlreadyExists path -> "output already exists: " <> path
   RefusingToOverwriteSelf path -> "refusing to overwrite running executable: " <> path
   EmitterAlreadyContainsImage -> "an emitted executable cannot emit another image"
@@ -3881,7 +4351,14 @@ _generateApiDocs = do
         title_ "Hell's API"
       body_ do
         h1_ "Hell's API"
-        h2_ $ do "Version: "; toHtml hellVersion
+        h2_ $
+          toHtml $
+            "Hell "
+              <> hellVersion
+              <> " — "
+              <> applicationImageFeatureName
+              <> " "
+              <> applicationImageFeatureVersion
         p_ $ a_ [href_ "../"] $ "Back to homepage"
         input_ [type_ "text", id_ "search", placeholder_ "Filter..."]
         h2_ "Types"
@@ -3890,7 +4367,7 @@ _generateApiDocs = do
           for_ (excludeHidden $ Map.toList supportedTypeConstructors) typeConsToHtml
         h2_ "Instances"
         ul_ do
-          for_ (Map.toList instances.getInstances) instToHtml
+          for_ (List.sortOn instStableName $ Map.toList instances.getInstances) instToHtml
         h2_ "Terms"
         let groups =
               excludeHidden $
@@ -3978,6 +4455,9 @@ instToHtml ((cls', ty), dyn') =
         entailed = Text.isPrefixOf "<<ED1" (Text.pack (show dyn'))
         foralld = Text.isPrefixOf "<<D1" (Text.pack (show dyn'))
         foralld2 = Text.isPrefixOf "<<D2" (Text.pack (show dyn'))
+
+instStableName :: ((SomeTypeRep, SomeTypeRep), Dynamic) -> String
+instStableName ((cls', ty), _) = show cls' <> " " <> show ty
 
 typeConsToHtml :: (String, SomeTypeRep) -> Html ()
 typeConsToHtml (name, SomeTypeRep rep) =
@@ -4108,6 +4588,110 @@ imageSpec = do
         Left err -> expectationFailure $ show err
         Right actual -> actual `shouldBe` program
 
+    it "distinguishes a pristine runtime from a valid required image" do
+      loadImageFromBytes syntheticRuntime `shouldSatisfy` \case
+        NoImage -> True
+        _ -> False
+      loadImageFromBytes validImageBytes `shouldSatisfy` \case
+        LoadedImage {} -> True
+        _ -> False
+
+    it "fails closed after append, trailer removal, and every end-frame truncation" do
+      let invalid bytes = loadImageFromBytes bytes `shouldSatisfy` isInvalidImage
+          requiredPrefix = either (error . show) id $ patchRuntimeIdentity syntheticRuntime
+      invalid $ validImageBytes <> "\0"
+      invalid requiredPrefix
+      forM_ [1 .. fromIntegral imageFrameSize] \count ->
+        invalid $ ByteString.take (ByteString.length validImageBytes - count) validImageBytes
+
+    it "fails closed for every framing-magic byte and inconsistent duplicate lengths" do
+      let prefixLength = ByteString.length syntheticRuntime
+          endStart = ByteString.length validImageBytes - fromIntegral imageFrameSize
+          invalid bytes = loadImageFromBytes bytes `shouldSatisfy` isInvalidImage
+      forM_ [0 .. 15] \index -> invalid $ flipByte (prefixLength + index) validImageBytes
+      forM_ [0 .. 15] \index -> invalid $ flipByte (endStart + index) validImageBytes
+      invalid $ flipByte (prefixLength + 32) validImageBytes
+
+    it "renders stable framing and resource diagnostics" do
+      renderImageError (MissingImageFrame "end")
+        `shouldBe` "invalid framing: missing or damaged end frame"
+      renderImageError InconsistentImageFrames
+        `shouldBe` "invalid framing: start/end records disagree"
+      renderImageError (ResourceBudgetExceeded "thaw nodes")
+        `shouldBe` "resource budget exceeded: thaw nodes"
+
+    it "binds runtime ABI identity to schema and registry compatibility" do
+      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "literal:Text.putStrLn:"
+      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "polymorphic:IO.pure:"
+      runtimeAbiFingerprintWith imageCompatibilityFingerprint "static"
+        `shouldNotBe` runtimeAbiFingerprintWith (imageCompatibilityFingerprint `xor` 1) "static"
+
+    it "preserves ordinary and RTS-looking program arguments through freeze/thaw/link" do
+      (sourceAction, imageAction) <- fixtureActions "args-rts.hell"
+      Temp.withSystemTempDirectory "hell-image-args" \directory -> do
+        let sourceOutput = directory FilePath.</> "source.args"
+            imageOutput = directory FilePath.</> "image.args"
+            arguments = ["-x", "--help", "--version", "--RTS"]
+        Env.setEnv "HELL_IMAGE_TEST_ENV" "fixture-environment"
+        Env.setEnv "HELL_IMAGE_ARGS_OUTPUT" sourceOutput
+        withArgs arguments $ eval () sourceAction
+        Env.setEnv "HELL_IMAGE_ARGS_OUTPUT" imageOutput
+        withArgs arguments $ eval () imageAction
+        sourceBytes <- S8.readFile sourceOutput
+        S8.readFile imageOutput `shouldReturn` sourceBytes
+
+    it "preserves representative polymorphic primitives through freeze/thaw/link" do
+      (sourceAction, imageAction) <- fixtureActions "primitives.hell"
+      Temp.withSystemTempDirectory "hell-image-primitives" \directory -> do
+        let sourceOutput = directory FilePath.</> "source.out"
+            imageOutput = directory FilePath.</> "image.out"
+        Env.setEnv "HELL_IMAGE_PRIMITIVES_OUTPUT" sourceOutput
+        eval () sourceAction
+        Env.setEnv "HELL_IMAGE_PRIMITIVES_OUTPUT" imageOutput
+        eval () imageAction
+        sourceBytes <- S8.readFile sourceOutput
+        S8.readFile imageOutput `shouldReturn` sourceBytes
+
+    it "runs the deterministic three-worker bounded-pool fixture after relinking" do
+      (sourceAction, imageAction) <- fixtureActions "bounded-pool.hell"
+      Temp.withSystemTempDirectory "hell-image-pool" \directory -> do
+        let sourceOutput = directory FilePath.</> "source"
+            imageOutput = directory FilePath.</> "image"
+            expected =
+              List.sort
+                [ "A-1.done",
+                  "A-2.done",
+                  "B-1.done",
+                  "B-2.done",
+                  "C-1.done",
+                  "C-2.done",
+                  "pool.complete"
+                ]
+        Env.setEnv "HELL_IMAGE_POOL_OUTPUT" sourceOutput
+        Timeout.timeout (5 * 1000 * 1000) (eval () sourceAction) `shouldReturn` Just ()
+        Env.setEnv "HELL_IMAGE_POOL_OUTPUT" imageOutput
+        Timeout.timeout (5 * 1000 * 1000) (eval () imageAction) `shouldReturn` Just ()
+        (List.sort <$> Dir.listDirectory sourceOutput) `shouldReturn` expected
+        (List.sort <$> Dir.listDirectory imageOutput) `shouldReturn` expected
+
+    it "requires every reserved image marker in a framed executable" do
+      forM_ requiredImageIdentityMarkers \marker -> do
+        let (markerPrefix, rest) = ByteString.breakSubstring marker validImageBytes
+        ByteString.null rest `shouldBe` False
+        let damaged = flipByte (ByteString.length markerPrefix) validImageBytes
+        loadImageFromBytes damaged `shouldSatisfy` isInvalidImage
+
+    it "does not classify marker-like payload text as runtime identity" do
+      let markerText = Text.decodeUtf8 $ ByteString.concat $ plainImageIdentityMarkers <> requiredImageIdentityMarkers
+          collisionProgram = framingProgram {frozenSourceLabel = markerText}
+          collisionImage =
+            either (error . show) id $
+              assembleImageBytes syntheticRuntime $
+                encodeProgram collisionProgram
+      loadImageFromBytes collisionImage `shouldSatisfy` \case
+        LoadedImage {} -> True
+        _ -> False
+
     it "rejects trailing payload bytes" do
       let program =
             FrozenProgram "x.hell" "linux" "x86_64" "ghc" $
@@ -4155,19 +4739,37 @@ imageSpec = do
           variable = FVar intType "x"
           application = FApp intType variable variable
       runImageGetFromBytes
-        (DecodeBudget 1 maximumTypeNodes)
+        initialDecodeBudget {remainingTermNodes = 1}
         (getFrozenTerm 0)
         (frozenTermBytes application)
         `shouldSatisfy` Either.isLeft
       runImageGetFromBytes
-        (DecodeBudget maximumTermNodes 1)
+        initialDecodeBudget {remainingTypeNodes = 1}
         (getFrozenType 0)
         (frozenTypeBytes $ FTApp intType intType)
         `shouldSatisfy` Either.isLeft
 
+    it "enforces aggregate text, list, thaw, and link budgets" do
+      runImageGetFromBytes
+        initialDecodeBudget {remainingTextBytes = 2}
+        getText
+        (L.toStrict $ Put.runPut $ putText "abc")
+        `shouldSatisfy` Either.isLeft
+      runImageGetFromBytes
+        initialDecodeBudget {remainingListElements = 1}
+        (getList $ lift Get.getWord8)
+        (L.toStrict $ Put.runPut $ putList Put.putWord8 [1, 2])
+        `shouldSatisfy` Either.isLeft
+      let unitRep = SomeTypeRep $ typeRep @()
+          variable = UVar HSE.noSrcSpan unitRep "x"
+          application = UApp HSE.noSrcSpan unitRep variable variable
+      validateTermForLinkWithBudget 1 application `shouldSatisfy` \case
+        Left ResourceBudgetExceeded {} -> True
+        _ -> False
+
     it "rejects encoded programs that cannot run as IO ()" do
       let program =
-            FrozenProgram "x.hell" (Text.pack Info.os) (Text.pack Info.arch) "ghc" $
+            FrozenProgram "x.hell" (Text.pack Info.os) (Text.pack Info.arch) (Text.pack $ showVersion Info.compilerVersion) $
               FPrim (FTCon $ typeRepKey $ typeRep @()) FPUnit []
       encodeProgramChecked program `shouldSatisfy` \case
         Left InvalidLinkedProgram {} -> True
@@ -4183,12 +4785,77 @@ imageSpec = do
         result `shouldBe` Left (Exit.ExitFailure 1)
         S8.readFile output `shouldReturn` "old"
 
+    it "allows exactly one concurrent no-force installer" do
+      Temp.withSystemTempDirectory "hell-image-no-force-race" \directory -> do
+        let left = directory FilePath.</> "left"
+            right = directory FilePath.</> "right"
+            output = directory FilePath.</> "output"
+        S8.writeFile left "left-complete"
+        S8.writeFile right "right-complete"
+        (leftResult, rightResult) <-
+          Async.concurrently
+            (Exception.try @Exit.ExitCode $ installExecutable False left output)
+            (Exception.try @Exit.ExitCode $ installExecutable False right output)
+        length (filter Either.isRight [leftResult, rightResult]) `shouldBe` 1
+        bytes <- S8.readFile output
+        bytes `shouldSatisfy` (`elem` ["left-complete", "right-complete"])
+
+    it "leaves one complete executable after concurrent force installers" do
+      Temp.withSystemTempDirectory "hell-image-force-race" \directory -> do
+        let left = directory FilePath.</> "left"
+            right = directory FilePath.</> "right"
+            output = directory FilePath.</> "output"
+        S8.writeFile left $ S8.replicate 4096 'L'
+        S8.writeFile right $ S8.replicate 4096 'R'
+        _ <-
+          Async.concurrently
+          (installExecutable True left output)
+          (installExecutable True right output)
+        bytes <- S8.readFile output
+        bytes `shouldSatisfy` \actual ->
+          actual == S8.replicate 4096 'L' || actual == S8.replicate 4096 'R'
+
     it "preserves exact Double bit patterns" do
       let bits = 0x7ff8000000000042
       case getFrozenPrimitiveFromBytes $ frozenPrimitiveBytes $ FPDoubleBits bits of
         Right (FPDoubleBits actual) -> actual `shouldBe` bits
         other -> expectationFailure $ show other
+
+    it "sets application output mode to exactly 0755" do
+      Temp.withSystemTempDirectory "hell-image-mode" \directory -> do
+        let path = directory FilePath.</> "image"
+        S8.writeFile path "image"
+        Posix.setFileMode path 0o6777
+        setApplicationExecutableMode path
+        status <- Posix.getFileStatus path
+        Posix.fileMode status .&. 0o7777 `shouldBe` 0o755
   where
+    framingProgram =
+      FrozenProgram "fixture.hell" (Text.pack Info.os) (Text.pack Info.arch) "ghc" $
+        FPrim (FTCon $ typeRepKey $ typeRep @()) FPUnit []
+    framingPayload = encodeProgram framingProgram
+    syntheticRuntime =
+      "synthetic-runtime-prefix\0"
+        <> ByteString.intercalate "\0slot\0" plainImageIdentityMarkers
+        <> "\0synthetic-runtime-suffix"
+    validImageBytes = either (error . show) id $ assembleImageBytes syntheticRuntime framingPayload
+    isInvalidImage = \case
+      InvalidImage {} -> True
+      _ -> False
+    flipByte index bytes =
+      ByteString.take index bytes
+        <> ByteString.singleton (ByteString.index bytes index `xor` 1)
+        <> ByteString.drop (index + 1) bytes
+    fixtureActions name = do
+      let path = "test" FilePath.</> "fixtures" FilePath.</> "application-image-compilation" FilePath.</> name
+      inferred <- inferFile NoStats path
+      let sourceAction = either error id $ linkMain inferred
+          frozen = either (error . show) id $ freezeProgram path inferred
+          payload = either (error . show) id $ encodeProgramChecked frozen
+          decoded = either (error . show) id $ decodeProgram payload
+          thawed = either (error . show) id $ thawProgram decoded
+          imageAction = either (error . show) id $ linkFrozenMain thawed
+      pure (sourceAction, imageAction)
     frozenPrimitiveBytes = L.toStrict . Put.runPut . putFrozenPrimitive
     frozenTermBytes = L.toStrict . Put.runPut . putFrozenTerm
     frozenTypeBytes = L.toStrict . Put.runPut . putFrozenType

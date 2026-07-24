@@ -1,0 +1,59 @@
+#!/usr/bin/env hell
+
+argument = \position values ->
+  Maybe.maybe (Error.error "missing fake-gh argument") Function.id
+    (Maybe.listToMaybe (List.drop position values))
+
+env = \name -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe (Exit.die (Text.concat ["missing fake-gh env: ", name])) IO.pure
+    (List.lookup name values)
+
+main = do
+  arguments <- Environment.getArgs
+  mode <- Main.env "FAKE_GH_MODE"
+  logPath <- Main.env "FAKE_GH_LOG"
+  Text.appendFile logPath (Text.unlines [Text.intercalate "\t" arguments])
+  let family = Main.argument 0 arguments
+  let operation = Main.argument 1 arguments
+  if List.and [Eq.eq family "release", Eq.eq operation "view"]
+    then do
+      commit <- Main.env "FAKE_GH_COMMIT"
+      body <- Main.env "FAKE_GH_BODY_JSON"
+      Text.putStrLn
+        (Text.concat
+          [ "{\"body\":", body,
+            ",\"isDraft\":", if Eq.eq mode "published" then "false" else "true",
+            ",\"name\":\"Hell 2026-05-29 — Application Image Compilation 1.0.0\"",
+            ",\"tagName\":\"application-image-compilation/v1.0.0\"",
+            ",\"targetCommitish\":\"", commit, "\"}"
+          ])
+    else if List.and [Eq.eq family "release", Eq.eq operation "download"]
+      then do
+        remote <- Main.env "FAKE_GH_REMOTE"
+        let output = Main.argument 6 arguments
+        names <- Directory.listDirectory remote
+        Monad.forM_ names \name ->
+          Directory.copyFile
+            (Text.concat [remote, "/", name])
+            (Text.concat [output, "/", name])
+    else if List.and [Eq.eq family "release", Eq.eq operation "upload"]
+      then do
+        remote <- Main.env "FAKE_GH_REMOTE"
+        let source = Main.argument 3 arguments
+        let names =
+              [ "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+                "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+                "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+                "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+                "release.json", "SHA256SUMS"
+              ]
+        let matching = List.filter (\name -> Text.isSuffixOf name source) names
+        let name = Maybe.maybe (Error.error "unknown uploaded asset") Function.id
+              (Maybe.listToMaybe matching)
+        Directory.copyFile source (Text.concat [remote, "/", name])
+    else if List.and [Eq.eq family "release", Eq.eq operation "verify"]
+      then IO.pure ()
+    else if Eq.eq family "attestation"
+      then IO.pure ()
+    else Exit.die "unexpected fake-gh operation"

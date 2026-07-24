@@ -1,0 +1,11 @@
+main = do
+  args <- Environment.getArgs
+  cwd <- Directory.getCurrentDirectory
+  environment <- Environment.getEnv "HELL_IMAGE_TEST_ENV"
+  output <- Environment.getEnv "HELL_IMAGE_ARGS_OUTPUT"
+  Text.putStrLn "stdout:application-image"
+  Text.hPutStr IO.stderr "stderr:application-image\n"
+  IO.print args
+  Text.putStrLn cwd
+  Text.putStrLn environment
+  Text.writeFile output $ Text.unlines args

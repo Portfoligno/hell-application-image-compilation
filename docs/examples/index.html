@@ -1,4 +1,7 @@
-<!doctype html><html><head><style>body {max-width: 40em; margin: .5in auto;}
+<!doctype html>
+<html>
+<head>
+<style>body {max-width: 40em; margin: .5in auto;}
 h1,h2,h3,h4,h5,h6 {font-family: Helvetica;}
 a {color: #1a6e8e}
 pre, code {font-size: 16px; word-wrap: break-word;}
@@ -18,16 +21,24 @@ pre.sourceCode span.co {color: #666}
  }
 
 li { line-height: 2em }
-</style></head><body><h1>Hell examples</h1><p><a href='../'>Back to homepage</a></p><h2>01-hello-world.hell</h2><div class="sourceCode" id="cb1"><pre
+</style>
+</head>
+<body>
+<h1>Hell examples</h1>
+<p><a href='../'>Back to homepage</a></p>
+<h2>01-hello-world.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#!/usr/bin/env hell</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> Text.putStrLn <span class="st">&quot;Hello, World!&quot;</span></span></code></pre></div>
-<h2>02-interaction.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>02-interaction.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;Please enter your name and hit ENTER:&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  name <span class="ot">&lt;-</span> Text.getLine</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;Thanks, your name is: &quot;</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn name</span></code></pre></div>
-<h2>03-press-any-key.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>03-press-any-key.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span>hSetBuffering <span class="dt">IO</span><span class="op">.</span>stdin <span class="dt">IO</span><span class="op">.</span><span class="dt">NoBuffering</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span>hSetBuffering <span class="dt">IO</span><span class="op">.</span>stdout <span class="dt">IO</span><span class="op">.</span><span class="dt">NoBuffering</span></span>
@@ -37,14 +48,16 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span>hSetBuffering <span class="dt">IO</span><span class="op">.</span>stdout <span class="dt">IO</span><span class="op">.</span><span class="dt">LineBuffering</span></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;OK!&quot;</span></span></code></pre></div>
-<h2>04-writing-files.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>04-writing-files.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> fp <span class="ot">=</span> <span class="st">&quot;foo.txt&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.writeFile fp <span class="st">&quot;Hello, &quot;</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Text.appendFile fp <span class="st">&quot;World!&quot;</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  text <span class="ot">&lt;-</span> Text.readFile fp</span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn text</span></code></pre></div>
-<h2>05-lists.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>05-lists.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> is <span class="ot">=</span> List.iterate&#39; (<span class="dt">Int</span><span class="op">.</span>plus <span class="dv">1</span>) <span class="dv">0</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> xs <span class="ot">=</span> [<span class="st">&quot;Hello, &quot;</span>, <span class="st">&quot;World!&quot;</span>]</span>
@@ -53,13 +66,15 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> i</span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    Text.putStrLn x</span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> List.foldl&#39; <span class="dt">Int</span><span class="op">.</span>plus <span class="dv">0</span> <span class="op">$</span> List.take <span class="dv">10</span> is</span></code></pre></div>
-<h2>06-polymorphism.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>06-polymorphism.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> x <span class="ot">=</span> <span class="st">&quot;Hello!&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Function.id x)</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> lengths <span class="ot">=</span> List.map Text.length [<span class="st">&quot;foo&quot;</span>, <span class="st">&quot;mu&quot;</span>]</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">mapM_</span> (\i <span class="ot">-&gt;</span> Text.putStrLn (<span class="dt">Int</span><span class="op">.</span><span class="fu">show</span> i)) lengths</span></code></pre></div>
-<h2>07-loops.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>07-loops.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">mapM_</span> Text.putStrLn [<span class="st">&quot;Hello, &quot;</span>, <span class="st">&quot;World!&quot;</span>]</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -67,7 +82,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    Text.putStrLn <span class="st">&quot;Ahhhhh! More?&quot;</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    l <span class="ot">&lt;-</span> Text.getLine</span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    loop)</span></code></pre></div>
-<h2>08-tuples.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>08-tuples.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> demo <span class="ot">=</span> \(x, y) <span class="ot">-&gt;</span> y</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> foobar <span class="ot">=</span> (<span class="dv">123</span>, <span class="st">&quot;foo&quot;</span>)</span>
@@ -79,7 +95,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span><span class="ot"> typeSigsWork ::</span> () <span class="ot">=</span> ()</span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Monad</span><span class="op">.</span><span class="fu">return</span> ()</span></code></pre></div>
-<h2>09-processes.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>09-processes.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;OK&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  (code, out, err) <span class="ot">&lt;-</span> <span class="dt">ByteString</span><span class="op">.</span>readProcess (Process.proc <span class="st">&quot;ls&quot;</span> [<span class="st">&quot;-al&quot;</span>])</span>
@@ -100,12 +117,14 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>  Process.runProcess <span class="op">$</span> Process.setWorkingDir <span class="st">&quot;/etc/&quot;</span> <span class="op">$</span> Process.proc <span class="st">&quot;pwd&quot;</span> []</span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;Done.&quot;</span></span></code></pre></div>
-<h2>10-current-directory.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>10-current-directory.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  dir <span class="ot">&lt;-</span> Directory.getCurrentDirectory</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn dir</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Directory.setCurrentDirectory dir</span></code></pre></div>
-<h2>11-env-vars.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>11-env-vars.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  env <span class="ot">&lt;-</span> Environment.getEnvironment</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  (out, err) <span class="ot">&lt;-</span></span>
@@ -114,7 +133,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>        (Process.proc <span class="st">&quot;env&quot;</span> [])</span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    )</span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  Text.hPutStr <span class="dt">IO</span><span class="op">.</span>stdout out</span></code></pre></div>
-<h2>12-fib.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>12-fib.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (<span class="dt">Int</span><span class="op">.</span><span class="fu">show</span> (Main.fib <span class="dv">30</span>))</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -130,7 +150,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="dv">0</span></span>
 <span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>        (<span class="dt">Int</span><span class="op">.</span>eq i <span class="dv">0</span>)</span>
 <span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    )</span></code></pre></div>
-<h2>13-concurrency.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>13-concurrency.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- Run two things concurrently and return both results</span></span>
@@ -151,14 +172,16 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>curl <span class="ot">=</span> \url <span class="ot">-&gt;</span> <span class="kw">do</span></span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>  (out, err) <span class="ot">&lt;-</span> Text.readProcess_ (Process.proc <span class="st">&quot;curl&quot;</span> [url])</span>
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">pure</span> out</span></code></pre></div>
-<h2>14-text.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>14-text.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Text.concat [<span class="st">&quot;Hello, &quot;</span>, <span class="st">&quot;World!&quot;</span>])</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Text.take <span class="dv">3</span> <span class="st">&quot;Hello, World!&quot;</span>)</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Text.drop <span class="dv">3</span> <span class="st">&quot;Hello, World!&quot;</span>)</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Text.strip <span class="st">&quot;  Hello, World!   &quot;</span>)</span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (Text.intercalate <span class="st">&quot;, &quot;</span> [<span class="st">&quot;Hello&quot;</span>,<span class="st">&quot;World!&quot;</span>])</span></code></pre></div>
-<h2>15-type-classes.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>15-type-classes.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (<span class="dt">Show</span><span class="op">.</span><span class="fu">show</span> <span class="dv">123</span>)</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn (<span class="dt">Show</span><span class="op">.</span><span class="fu">show</span> <span class="dt">Bool</span><span class="op">.</span><span class="dt">True</span>)</span>
@@ -176,7 +199,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    (Text.putStrLn <span class="st">&quot;Seems the environment variable is not there.&quot;</span>)</span>
 <span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>    (\path <span class="ot">-&gt;</span> Text.putStrLn (Text.concat [<span class="st">&quot;HOME is &quot;</span>, path]))</span>
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    (List.lookup <span class="st">&quot;HOME&quot;</span> env)</span></code></pre></div>
-<h2>16-if.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>16-if.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> List.and [<span class="dt">Eq</span><span class="op">.</span>eq (<span class="dt">Int</span><span class="op">.</span>plus <span class="dv">1</span> <span class="dv">1</span>) <span class="dv">2</span>,</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>               <span class="dt">Ord</span><span class="op">.</span>lt (<span class="dt">Int</span><span class="op">.</span>plus <span class="dv">1</span> <span class="dv">1</span>) <span class="dv">3</span>,</span>
@@ -192,7 +216,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> <span class="dt">Bool</span><span class="op">.</span><span class="fu">not</span> (<span class="dt">Eq</span><span class="op">.</span>eq <span class="dv">1</span> <span class="dv">2</span>)</span>
 <span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>     <span class="kw">then</span> Text.putStrLn <span class="st">&quot;OK, Bool.not works.&quot;</span></span>
 <span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>     <span class="kw">else</span> Text.putStrLn <span class="st">&quot;Uh, oh?&quot;</span></span></code></pre></div>
-<h2>17-reuse.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>17-reuse.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Technically you&#39;re not supposed to be able to do code re-use in</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- Hell, but presently the desugarer inlines everything into `main`</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- prior to type-checking, and ignores declarations that aren&#39;t</span></span>
@@ -203,7 +228,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  Main.foo <span class="st">&quot;blah&quot;</span></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>foo <span class="ot">=</span> \x <span class="ot">-&gt;</span> Text.putStrLn (<span class="dt">Show</span><span class="op">.</span><span class="fu">show</span> x)</span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>bar <span class="ot">=</span> <span class="dt">Int</span><span class="op">.</span>plus <span class="dv">4</span> <span class="st">&quot;hi&quot;</span></span></code></pre></div>
-<h2>18-monads.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>18-monads.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  env <span class="ot">&lt;-</span> Environment.getEnvironment</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -223,7 +249,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> <span class="dt">Eq</span><span class="op">.</span>eq s <span class="st">&quot;foo&quot;</span></span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>     <span class="kw">then</span> <span class="dt">Either</span><span class="op">.</span><span class="dt">Right</span> <span class="st">&quot;foooo :-)&quot;</span></span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>     <span class="kw">else</span> <span class="dt">Either</span><span class="op">.</span><span class="dt">Left</span> <span class="st">&quot;oh noes!&quot;</span></span></code></pre></div>
-<h2>19-blog-generator.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>19-blog-generator.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- This is a copy of the script that generates my blog.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- Dependencies:</span></span>
@@ -380,9 +407,11 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-154"><a href="#cb1-154" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;&lt;/rss&gt;&quot;</span></span>
 <span id="cb1-155"><a href="#cb1-155" aria-hidden="true" tabindex="-1"></a>        ]</span>
 <span id="cb1-156"><a href="#cb1-156" aria-hidden="true" tabindex="-1"></a>  Text.writeFile <span class="st">&quot;webroot/rss.xml&quot;</span> xml</span></code></pre></div>
-<h2>20-dollar.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>20-dollar.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> Text.putStrLn <span class="op">.</span> Text.reverse <span class="op">$</span> <span class="st">&quot;Foo!&quot;</span></span></code></pre></div>
-<h2>21-json.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>21-json.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">ByteString</span><span class="op">.</span><span class="fu">writeFile</span> <span class="st">&quot;demo.json&quot;</span> <span class="op">$</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    Json.encode <span class="op">$</span></span>
@@ -403,7 +432,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>        (\obj <span class="ot">-&gt;</span> <span class="st">&quot;Object.&quot;</span>))</span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>       <span class="op">$</span> Json.decode bytes</span>
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  Directory.removeFile <span class="st">&quot;demo.json&quot;</span></span></code></pre></div>
-<h2>22-records.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>22-records.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Person</span> <span class="ot">=</span> <span class="dt">Person</span> {<span class="ot"> age ::</span> <span class="dt">Int</span>,<span class="ot"> name ::</span> <span class="dt">Text</span> }</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
@@ -413,11 +443,13 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>person <span class="ot">=</span></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a> <span class="dt">Main.Person</span> { name <span class="ot">=</span> <span class="st">&quot;Chris&quot;</span>, age <span class="ot">=</span> <span class="dv">23</span> }</span></code></pre></div>
-<h2>23-args.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>23-args.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  args <span class="ot">&lt;-</span> Environment.getArgs</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Monad</span><span class="op">.</span>forM_ args <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span></span></code></pre></div>
-<h2>24-exitcode.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>24-exitcode.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  (code, out, err) <span class="ot">&lt;-</span> <span class="dt">ByteString</span><span class="op">.</span>readProcess (Process.proc <span class="st">&quot;ls&quot;</span> [<span class="st">&quot;-al&quot;</span>])</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -431,7 +463,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> <span class="dt">Eq</span><span class="op">.</span>eq code <span class="dt">Exit.ExitSuccess</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>     <span class="kw">then</span> Text.putStrLn <span class="st">&quot;OK, good!&quot;</span></span>
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>     <span class="kw">else</span> Text.putStrLn <span class="st">&quot;Oh, sad.&quot;</span></span></code></pre></div>
-<h2>25-sum-types.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>25-sum-types.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Value</span> <span class="ot">=</span> <span class="dt">Text</span> <span class="dt">Text</span> <span class="op">|</span> <span class="dt">Number</span> <span class="dt">Int</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Rating</span> <span class="ot">=</span> <span class="dt">Good</span> <span class="op">|</span> <span class="dt">Bad</span> <span class="op">|</span> <span class="dt">Ugly</span></span>
@@ -457,7 +490,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Good</span> <span class="ot">-&gt;</span> <span class="st">&quot;Good!&quot;</span></span>
 <span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Bad</span> <span class="ot">-&gt;</span> <span class="st">&quot;Bad!&quot;</span></span>
 <span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>    _ <span class="ot">-&gt;</span> <span class="st">&quot;Ugly!&quot;</span></span></code></pre></div>
-<h2>26-reference-other-types.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>26-reference-other-types.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- User-defined types can reference other types now.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Person</span> <span class="ot">=</span> <span class="dt">Person</span> {</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ot">  name ::</span> <span class="dt">Text</span>,</span>
@@ -484,7 +518,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">case</span> Record.get <span class="op">@</span><span class="st">&quot;status&quot;</span> <span class="op">@</span><span class="dt">Main.Status</span> p <span class="kw">of</span></span>
 <span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Retired</span> <span class="ot">-&gt;</span> Text.putStrLn <span class="st">&quot;Retired&quot;</span></span>
 <span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Working</span> <span class="ot">-&gt;</span> Text.putStrLn <span class="st">&quot;Working&quot;</span></span></code></pre></div>
-<h2>27-discussion-64.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>27-discussion-64.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- &lt;https://github.com/chrisdone/hell/discussions/64&gt;</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- Previously:</span></span>
@@ -504,7 +539,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> myRecord <span class="ot">=</span> <span class="dt">Main.MyRecord</span> {<span class="fu">sum</span> <span class="ot">=</span> <span class="dt">Main.MySumR</span>}</span>
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;hello world&quot;</span></span></code></pre></div>
-<h2>28-trees.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>28-trees.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Basic example of a tree data structure.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> tree <span class="ot">=</span></span>
@@ -526,14 +562,16 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>      <span class="dt">Monad</span><span class="op">.</span>forM_ children (\m <span class="ot">-&gt;</span> <span class="kw">do</span> Text.putStr <span class="st">&quot; &quot;</span>; m)</span>
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>      Text.putStr <span class="st">&quot;)&quot;</span>)</span>
 <span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>    tree&#39;</span></code></pre></div>
-<h2>29-temp-files.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>29-temp-files.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Temp.withSystemTempDirectory <span class="st">&quot;example&quot;</span> \dirPath <span class="ot">-&gt;</span> <span class="kw">do</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    Text.putStrLn <span class="op">$</span> Text.concat [<span class="st">&quot;Created temp directory &quot;</span>, dirPath]</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  Temp.withSystemTempFile <span class="st">&quot;example&quot;</span> \filePath handle <span class="ot">-&gt;</span> <span class="kw">do</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    Text.putStrLn <span class="op">$</span> Text.concat [<span class="st">&quot;Created temp file &quot;</span>, filePath]</span></code></pre></div>
-<h2>30-process-handlers.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>30-process-handlers.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- 1. close the handle after the process</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Temp.withSystemTempFile <span class="st">&quot;example&quot;</span> \filePath handle <span class="ot">-&gt;</span> <span class="kw">do</span></span>
@@ -568,7 +606,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">IO</span><span class="op">.</span>hClose handle</span>
 <span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    contents <span class="ot">&lt;-</span> Text.readFile filePath</span>
 <span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>    Text.putStrLn contents</span></code></pre></div>
-<h2>31-open-file-handle.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>31-open-file-handle.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> filepath <span class="ot">=</span> <span class="st">&quot;out.txt&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  handle <span class="ot">&lt;-</span> <span class="dt">IO</span><span class="op">.</span>openFile filepath <span class="dt">IO</span><span class="op">.</span><span class="dt">WriteMode</span></span>
@@ -579,7 +618,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  contents <span class="ot">&lt;-</span> Text.readFile filepath</span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn contents</span></code></pre></div>
-<h2>32-optparse.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>32-optparse.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Includes example of Semigroup.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Opts</span> <span class="ot">=</span> <span class="dt">Opts</span> {</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ot">  quiet ::</span> <span class="dt">Bool</span>,</span>
@@ -593,18 +633,21 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  opts <span class="ot">&lt;-</span> Options.execParser (Options.info (Main.options <span class="op">&lt;**&gt;</span> Options.helper) Options.fullDesc)</span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> <span class="dt">Maybe</span><span class="op">.</span><span class="fu">maybe</span> <span class="st">&quot;No file path&quot;</span> Function.id (Record.get <span class="op">@</span><span class="st">&quot;filePath&quot;</span> opts)</span>
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> <span class="dt">Show</span><span class="op">.</span><span class="fu">show</span> <span class="op">@</span><span class="dt">Bool</span> <span class="op">$</span> Record.get <span class="op">@</span><span class="st">&quot;quiet&quot;</span> opts</span></code></pre></div>
-<h2>33-null-stream.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>33-null-stream.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- discard stdout</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Process.runProcess_ <span class="op">$</span> Process.setStdout Process.nullStream <span class="op">$</span> Process.proc <span class="st">&quot;ls&quot;</span> []</span></code></pre></div>
-<h2>34-field-puns.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>34-field-puns.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Foo</span> <span class="ot">=</span> <span class="dt">Foo</span> { bar,<span class="ot"> mu ::</span> <span class="dt">Int</span> }</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> bar <span class="ot">=</span> <span class="dv">123</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> mu <span class="ot">=</span> <span class="dv">666</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> r <span class="ot">=</span> <span class="dt">Main.Foo</span>{bar,mu}</span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> Record.get <span class="op">@</span><span class="st">&quot;bar&quot;</span> <span class="op">@</span><span class="dt">Int</span> r</span></code></pre></div>
-<h2>35-type-sigs.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>35-type-sigs.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Foo</span> <span class="ot">=</span> <span class="dt">Foo</span> { bar,<span class="ot"> mu ::</span> <span class="dt">Int</span> }</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ot">main ::</span> <span class="dt">IO</span> () <span class="ot">=</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Main.foo</span>
@@ -614,7 +657,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> mu <span class="ot">=</span> <span class="dv">666</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> r <span class="ot">=</span> <span class="dt">Main.Foo</span>{bar,mu}</span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> (Record.get <span class="op">@</span><span class="st">&quot;bar&quot;</span><span class="ot"> r ::</span> <span class="dt">Int</span>)</span></code></pre></div>
-<h2>36-these.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>36-these.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> things <span class="ot">=</span> [<span class="dt">These.This</span> <span class="dv">1</span>, <span class="dt">These.That</span> <span class="st">&quot;hello&quot;</span>, <span class="dt">These.These</span> <span class="dv">2</span> <span class="st">&quot;bonjour&quot;</span>]</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -624,7 +668,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>      (\s <span class="ot">-&gt;</span> s)</span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>      (\i s <span class="ot">-&gt;</span> Text.concat [<span class="dt">Show</span><span class="op">.</span><span class="fu">show</span> i, <span class="st">&quot; &quot;</span>, s])</span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>      thing</span></code></pre></div>
-<h2>37-readshow.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>37-readshow.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Reading and showing numbers</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
@@ -647,14 +692,16 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> <span class="dt">Double</span><span class="op">.</span>showFFloat (<span class="dt">Maybe</span><span class="op">.</span><span class="dt">Just</span> <span class="dv">3</span>) <span class="fl">123456789.123456789</span> <span class="st">&quot;&quot;</span></span>
 <span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> <span class="dt">Double</span><span class="op">.</span>showFFloat (<span class="dt">Maybe</span><span class="op">.</span><span class="dt">Just</span> <span class="dv">3</span>) <span class="fl">123456789.0</span> <span class="st">&quot;&quot;</span></span>
 <span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> <span class="dt">Double</span><span class="op">.</span>showFFloat <span class="dt">Maybe</span><span class="op">.</span><span class="dt">Nothing</span> <span class="fl">123456789.0</span> <span class="st">&quot;&quot;</span></span></code></pre></div>
-<h2>38-integer.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>38-integer.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- prints: 18446744073709551614</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Integer</span><span class="op">.</span>plus</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>      (<span class="dt">Int</span><span class="op">.</span><span class="fu">toInteger</span> <span class="dv">9223372036854775807</span>)</span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>      (<span class="dt">Int</span><span class="op">.</span><span class="fu">toInteger</span> <span class="dv">9223372036854775807</span>)</span></code></pre></div>
-<h2>39-day.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>39-day.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ot">  day1 ::</span> <span class="dt">Day</span> <span class="ot">&lt;-</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Maybe</span><span class="op">.</span><span class="fu">maybe</span> (Error.error <span class="st">&quot;Invalid&quot;</span>) <span class="dt">IO</span><span class="op">.</span><span class="fu">pure</span> <span class="op">$</span> Day.fromGregorianValid (<span class="dt">Int</span><span class="op">.</span><span class="fu">toInteger</span> <span class="dv">2025</span>) <span class="dv">08</span> <span class="dv">09</span></span>
@@ -662,7 +709,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> <span class="dt">Eq</span><span class="op">.</span>eq day1 day2 <span class="co">-- True</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="op">$</span> Day.iso8601Show day1 <span class="co">-- 2025-08-09</span></span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> Day.dayOfWeek day1</span></code></pre></div>
-<h2>40-utctime.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>40-utctime.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  now <span class="ot">&lt;-</span> UTCTime.getCurrentTime</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;Current time:&quot;</span></span>
@@ -680,7 +728,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>  Text.putStrLn <span class="st">&quot;Parts:&quot;</span></span>
 <span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> TimeOfDay.timeToTimeOfDay <span class="op">$</span> UTCTime.utctDayTime now</span>
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> UTCTime.utctDay now</span></code></pre></div>
-<h2>41-commands.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>41-commands.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- --help:</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- Usage: &lt;interactive&gt; COMMAND</span></span>
@@ -719,7 +768,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Add</span> f    <span class="ot">-&gt;</span> Text.putStrLn <span class="op">$</span> <span class="st">&quot;Adding &quot;</span> <span class="op">&lt;&gt;</span> f</span>
 <span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Remove</span> f <span class="ot">-&gt;</span> Text.putStrLn <span class="op">$</span> <span class="st">&quot;Removing &quot;</span> <span class="op">&lt;&gt;</span> f</span>
 <span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>    <span class="dt">List</span>     <span class="ot">-&gt;</span> Text.putStrLn <span class="st">&quot;Listing files&quot;</span></span></code></pre></div>
-<h2>42-primcase.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>42-primcase.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="fu">maybe</span> <span class="ot">=</span> \i <span class="ot">-&gt;</span> <span class="kw">case</span> i <span class="kw">of</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Maybe</span><span class="op">.</span><span class="dt">Just</span> x <span class="ot">-&gt;</span> <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> x</span>
@@ -776,7 +826,8 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a>  bool <span class="op">$</span> <span class="dt">Json.Null</span></span>
 <span id="cb1-55"><a href="#cb1-55" aria-hidden="true" tabindex="-1"></a>  bool <span class="op">$</span> <span class="dt">Json.Number</span> <span class="fl">123.0</span></span>
 <span id="cb1-56"><a href="#cb1-56" aria-hidden="true" tabindex="-1"></a>  bool <span class="op">$</span> <span class="dt">Json.Bool</span> <span class="dt">Bool</span><span class="op">.</span><span class="dt">True</span></span></code></pre></div>
-<h2>43-http.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>43-http.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Http.run <span class="dv">8080</span> \request respond <span class="ot">-&gt;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> <span class="dt">Eq</span><span class="op">.</span>eq (Http.pathInfo request) []</span>
@@ -795,8 +846,10 @@ class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a 
 <span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>            [(CI.mk (Text.encodeUtf8 <span class="st">&quot;Content-Type&quot;</span>), Text.encodeUtf8 <span class="st">&quot;text/markdown&quot;</span>)]</span>
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;docs/readme.md&quot;</span></span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>            <span class="dt">Maybe</span><span class="op">.</span><span class="dt">Nothing</span></span></code></pre></div>
-<h2>44-char.hell</h2><div class="sourceCode" id="cb1"><pre
+<h2>44-char.hell</h2>
+<div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  line <span class="ot">&lt;-</span> Text.getLine</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">IO</span><span class="op">.</span><span class="fu">print</span> <span class="op">$</span> Text.all (<span class="dt">Eq</span><span class="op">.</span>eq <span class="ch">&#39;x&#39;</span>) line</span></code></pre></div>
+</body>
 </html>

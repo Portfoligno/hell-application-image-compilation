@@ -1,0 +1,12 @@
+data Result = Result {label :: Text, count :: Int}
+
+main = do
+  output <- Environment.getEnv "HELL_IMAGE_PRIMITIVES_OUTPUT"
+  let result = Main.Result {label = "typed-relink", count = 3}
+  (left, right) <-
+    Async.concurrently
+      (IO.pure $ Record.get @"label" result)
+      (IO.pure $ Record.get @"count" result)
+  Text.putStrLn left
+  IO.print right
+  Text.writeFile output $ Text.concat [left, ":", Int.show right, "\n"]

@@ -1,0 +1,30 @@
+joinPath = \directory name ->
+  Maybe.maybe
+    (Text.concat [directory, "/", name])
+    (\without -> Text.concat [without, "/", name])
+    (Text.stripSuffix "/" directory)
+
+runUnit = \directory worker unit delay -> do
+  Text.putStrLn (Text.concat ["start:", worker, ":", unit])
+  Process.runProcess_ (Process.proc "sleep" [delay])
+  Text.putStrLn (Text.concat ["done:", worker, ":", unit])
+  Text.writeFile
+    (Main.joinPath directory (Text.concat [worker, "-", unit, ".done"]))
+    "done\n"
+
+worker = \directory name firstDelay secondDelay -> do
+  Main.runUnit directory name "1" firstDelay
+  Main.runUnit directory name "2" secondDelay
+
+main = do
+  directory <- Environment.getEnv "HELL_IMAGE_POOL_OUTPUT"
+  Directory.createDirectoryIfMissing Bool.True directory
+  _ <-
+    Async.concurrently
+      (Main.worker directory "A" "0.04" "0.01")
+      ( Async.concurrently
+          (Main.worker directory "B" "0.08" "0.01")
+          (Main.worker directory "C" "0.12" "0.01")
+      )
+  Text.writeFile (Main.joinPath directory "pool.complete") "done\n"
+  Text.putStrLn "pool:complete"

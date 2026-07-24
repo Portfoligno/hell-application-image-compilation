@@ -1,14 +1,72 @@
-name: "Test"
+name: Test
+
 on:
   pull_request:
   push:
+    branches:
+      - main
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  tests:
-    runs-on: ubuntu-latest
+  metadata:
+    name: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v5
-    - uses: cachix/install-nix-action@v31
-      with:
-        github_access_token: ${{ secrets.GITHUB_TOKEN }}
-    - run: nix build
-    - run: nix flake check
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the native Hell automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Enforce repository automation policy
+        run: ./result-automation policy
+      - name: Check fixed release metadata
+        run: ./result-automation metadata --check
+      - name: Check exact hpack output
+        run: ./result-automation hpack-drift
+      - name: Check source distribution
+        run: ./result-automation check-sdist
+      - name: Check generated documentation
+        run: ./result-automation check-docs
+
+  test:
+    name: test (${{ matrix.system }})
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Evaluate locked flake metadata
+        run: nix flake metadata --no-update-lock-file
+      - name: Run all native checks
+        run: nix flake check --no-update-lock-file --print-build-logs
+      - name: Build native static release candidate
+        run: nix build --no-update-lock-file .#release-static-native --out-link result-release
+      - name: Rebuild release candidate deterministically
+        run: nix build --check --no-update-lock-file .#release-static-native

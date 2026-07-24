@@ -1,0 +1,88 @@
+name: Verify published release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+concurrency:
+  group: verify-published-${{ github.event_name }}-${{ github.event.release.tag_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: read-only release verification (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out fixed release policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: application-image-compilation/v1.0.0
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Verify immutable release without mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELL_TARGET_ARCH: ${{ matrix.arch }}
+        run: ./result-automation verify-published verified-release
+
+  pages:
+    name: validate published pages
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out fixed published tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: application-image-compilation/v1.0.0
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Verify tagged documentation
+        run: ./result-automation check-docs
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Upload exact tagged Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: ./docs
+
+  deploy-pages:
+    name: deploy verified published pages
+    needs: pages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: https://portfoligno.github.io/hell-application-image-compilation/
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy tagged Pages
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

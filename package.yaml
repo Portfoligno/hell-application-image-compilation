@@ -1,9 +1,38 @@
-name: hell
-version: 666.20251111
-license: BSD3
+spec-version: 0.38.3
+name: hell-application-image-compilation
+version: 1.0.0
+license: BSD-3-Clause
 author: "Chris Done"
+maintainer: "Nicholas Yip <nicholasyip@obceit.cc>"
 copyright: "2023 Chris Done"
-synopsis: "Haskell-based shell scripting language"
+synopsis: "Hell with Linux application image compilation"
+description: |
+  Hell is a tiny Haskell dialect for shell scripting, created by Chris Done.
+  This independently maintained fork adds Application Image Compilation on
+  Linux. It is not an official upstream release and does not imply endorsement
+  by Chris Done or upstream contributors.
+category: "Development"
+homepage: "https://portfoligno.github.io/hell-application-image-compilation/"
+github: "Portfoligno/hell-application-image-compilation"
+bug-reports: "https://github.com/Portfoligno/hell-application-image-compilation/issues"
+extra-source-files:
+- FORK.md
+- RELEASE.md
+- release/*.json
+- release/*.md
+- release/sdist-files.txt
+- automation/*.hell
+- .github/actions/setup-hell/programs/*.hell
+- .github/actions/setup-hell/action.yml
+- test/automation/*.hell
+- test/fixtures/application-image-compilation/*.hell
+extra-doc-files:
+- CHANGELOG.md
+- README.md
+- SECURITY.md
+- SUPPORT.md
+- .github/CONTRIBUTING.md
+- docs/readme.md
 dependencies:
 - base >=4.17.2.1 && <4.22
 - haskell-src-exts

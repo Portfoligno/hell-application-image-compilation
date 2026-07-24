@@ -1,0 +1,51 @@
+{
+  "$schema": "./versions.schema.json",
+  "schemaVersion": 1,
+  "featureRelease": {
+    "name": "Application Image Compilation",
+    "slug": "application-image-compilation",
+    "package": "hell-application-image-compilation",
+    "version": "1.0.0",
+    "tag": "application-image-compilation/v1.0.0",
+    "artifactStem": "hell-application-image-compilation-1.0.0-hell-2026-05-29",
+    "title": "Hell 2026-05-29 — Application Image Compilation 1.0.0",
+    "notes": "release/notes-1.0.0.md",
+    "assets": [
+      "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+      "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+      "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+      "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+      "release.json",
+      "SHA256SUMS"
+    ],
+    "targets": [
+      {
+        "architecture": "x86_64",
+        "nixSystem": "x86_64-linux",
+        "runner": "ubuntu-24.04",
+        "archive": "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+        "archiveRoot": "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static",
+        "sbom": "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+        "fragment": "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.fragment.json"
+      },
+      {
+        "architecture": "aarch64",
+        "nixSystem": "aarch64-linux",
+        "runner": "ubuntu-24.04-arm",
+        "archive": "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+        "archiveRoot": "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static",
+        "sbom": "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+        "fragment": "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.fragment.json"
+      }
+    ]
+  },
+  "upstreamRuntime": {
+    "name": "Hell",
+    "version": "2026-05-29"
+  },
+  "imageCompatibility": {
+    "formatVersion": 2,
+    "abiVersion": 2,
+    "compatibilityFingerprint": "c5fd3286e5ebd3c8"
+  }
+}

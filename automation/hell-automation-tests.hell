@@ -1,0 +1,180 @@
+#!/usr/bin/env hell
+
+assert = \condition message ->
+  if condition then IO.pure () else Exit.die message
+
+lowerHex = \width value ->
+  List.and
+    [ Eq.eq (Text.length value) width,
+      Text.all
+        (\character -> List.elem character
+          ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'])
+        value
+    ]
+
+safeArchiveMember = \root member ->
+  List.and
+    [ Text.isPrefixOf root member,
+      Bool.not (Text.isPrefixOf "/" member),
+      Bool.not (List.elem ".." (Text.splitOn "/" member))
+    ]
+
+env = \name -> do
+  values <- Environment.getEnvironment
+  IO.pure (List.lookup name values)
+
+withEnvironment = \overrides process -> do
+  inherited <- Environment.getEnvironment
+  let names = List.map (\(name, _value) -> name) overrides
+  IO.pure
+    (Process.setEnv
+      (overrides <> List.filter (\(name, _value) -> Bool.not (List.elem name names)) inherited)
+      process)
+
+expectFailure = \process message -> do
+  (code, _out, _err) <- Text.readProcess process
+  Main.assert (Bool.not (Eq.eq code Exit.ExitSuccess)) message
+
+acceptance = \automation product sourceRoot -> do
+  findTool <- Main.env "HELL_TOOL_FIND"
+  statTool <- Main.env "HELL_TOOL_STAT"
+  chmodTool <- Main.env "HELL_TOOL_CHMOD"
+  let findPath = Maybe.maybe "find" Function.id findTool
+  let statPath = Maybe.maybe "stat" Function.id statTool
+  let chmodPath = Maybe.maybe "chmod" Function.id chmodTool
+  Temp.withSystemTempDirectory "hell-policy-negative" \temporary -> do
+    Directory.createDirectory (Text.concat [temporary, "/release"])
+    Text.writeFile (Text.concat [temporary, "/forbidden.sh"]) "#!/bin/sh\nexit 0\n"
+    Text.writeFile (Text.concat [temporary, "/flake.nix"]) "{}\n"
+    Monad.forM_
+      ["versions.schema.json", "release-manifest.schema.json", "spdx-2.3.schema.json"]
+      \name -> Text.writeFile (Text.concat [temporary, "/release/", name]) "{}\n"
+    process <- Main.withEnvironment
+      [("HELL_TOOL_FIND", findPath), ("HELL_TOOL_STAT", statPath)]
+      (Process.setWorkingDir temporary (Process.proc automation ["policy"]))
+    Main.expectFailure process "policy accepted a repository-owned shell program"
+  ready <- Directory.doesFileExist
+    (Text.concat [sourceRoot, "/.github/actions/setup-hell/trust/READY"])
+  Main.assert (Bool.not ready) "pre-publication setup unexpectedly has READY trust activation"
+  Temp.withSystemTempDirectory "hell-fake-gh" \temporary -> do
+    let bin = Text.concat [temporary, "/bin"]
+    let local = Text.concat [temporary, "/local"]
+    let remote = Text.concat [temporary, "/remote"]
+    Directory.createDirectory bin
+    Directory.createDirectory local
+    Directory.createDirectory remote
+    let fake = Text.concat [bin, "/gh"]
+    Directory.copyFile (Text.concat [sourceRoot, "/test/automation/fake-gh.hell"]) fake
+    Process.runProcess_ (Process.proc chmodPath ["0755", "--", fake])
+    let names =
+          [ "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+            "release.json", "SHA256SUMS"
+          ]
+    Monad.forM_ names \name -> Text.writeFile (Text.concat [local, "/", name]) (Text.concat [name, "\n"])
+    Directory.copyFile
+      (Text.concat [local, "/release.json"])
+      (Text.concat [remote, "/release.json"])
+    let notes = Text.concat [temporary, "/notes.md"]
+    Text.writeFile notes "notes\n"
+    let logPath = Text.concat [temporary, "/gh.log"]
+    Text.writeFile logPath ""
+    inherited <- Environment.getEnvironment
+    let oldPath = Maybe.maybe "" Function.id (List.lookup "PATH" inherited)
+    let common =
+          [ ("PATH", Text.concat [bin, ":", oldPath]),
+            ("FAKE_GH_MODE", "partial"),
+            ("FAKE_GH_LOG", logPath),
+            ("FAKE_GH_REMOTE", remote),
+            ("FAKE_GH_COMMIT", "0123456789abcdef0123456789abcdef01234567"),
+            ("FAKE_GH_BODY_JSON", "\"notes\\n\""),
+            ("GITHUB_SHA", "0123456789abcdef0123456789abcdef01234567"),
+            ("HELL_RELEASE_NOTES", notes)
+          ]
+    resume <- Main.withEnvironment common
+      (Process.proc automation ["stage-draft", local])
+    Process.runProcess_ resume
+    resumedLog <- Text.readFile logPath
+    Main.assert (Text.isInfixOf "release\tupload" resumedLog)
+      "partial draft did not resume missing assets"
+    finalNames <- Directory.listDirectory remote
+    Main.assert (Eq.eq (List.sort finalNames) (List.sort names))
+      "partial draft did not finish with the exact six remote assets"
+    Monad.forM_ names \name -> do
+      localBytes <- ByteString.readFile (Text.concat [local, "/", name])
+      remoteBytes <- ByteString.readFile (Text.concat [remote, "/", name])
+      Main.assert (Eq.eq localBytes remoteBytes)
+        "partial draft final remote bytes differ"
+    Text.writeFile (Text.concat [remote, "/release.json"]) "mismatch\n"
+    mismatch <- Main.withEnvironment common
+      (Process.proc automation ["stage-draft", local])
+    Main.expectFailure mismatch "draft accepted mismatched existing bytes"
+    Directory.removeFile (Text.concat [remote, "/release.json"])
+    Text.writeFile logPath ""
+    published <- Main.withEnvironment
+      ([("FAKE_GH_MODE", "published")] <>
+       List.filter (\(name, _value) -> Bool.not (Eq.eq name "FAKE_GH_MODE")) common)
+      (Process.proc automation ["verify-published", Text.concat [temporary, "/published"]])
+    Main.expectFailure published "incomplete published fixture unexpectedly verified"
+    publishedLog <- Text.readFile logPath
+    Monad.forM_ ["release\tupload", "release\tedit", "release\tdelete"] \mutation ->
+      Main.assert (Bool.not (Text.isInfixOf mutation publishedLog))
+        "published verifier attempted a mutating GitHub operation"
+
+main = do
+  arguments <- Environment.getArgs
+  Main.assert
+    (Eq.eq arguments ["space value", "--leading", "*", "$(literal)", "semi;colon"])
+    "application image did not preserve hostile argv"
+  Main.assert (Main.lowerHex 40 "0123456789abcdef0123456789abcdef01234567")
+    "lowercase commit validation rejected a full object id"
+  Main.assert (Bool.not (Main.lowerHex 40 "0123456789ABCDEF0123456789abcdef01234567"))
+    "lowercase commit validation accepted uppercase hex"
+  Main.assert
+    (Main.safeArchiveMember "release-root/" "release-root/README.md")
+    "reviewed archive member was rejected"
+  Monad.forM_
+    ["../escape", "/absolute", "release-root/../escape"]
+    \member -> Main.assert
+      (Bool.not (Main.safeArchiveMember "release-root/" member))
+      "hostile archive/sdist member was accepted"
+  Main.assert
+    (Bool.not (Eq.eq
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+    "cache poisoning digest mismatch was accepted"
+  Main.assert
+    (Eq.eq
+      (List.sort
+        [ "release.json", "SHA256SUMS",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json"
+        ])
+      (List.sort
+        [ "SHA256SUMS", "release.json",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+          "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz"
+        ]))
+    "six-asset set comparison is order dependent"
+  automation <- Main.env "HELL_AUTOMATION"
+  product <- Main.env "HELL_PRODUCT_BINARY"
+  sourceRoot <- Main.env "SOURCE_ROOT"
+  Maybe.maybe
+    (IO.pure ())
+    (\automationPath ->
+      Maybe.maybe
+        (IO.pure ())
+        (\productPath ->
+          Maybe.maybe
+            (IO.pure ())
+            (\root -> Main.acceptance automationPath productPath root)
+            sourceRoot)
+        product)
+    automation
+  Text.putStrLn "hell automation argv tests passed"

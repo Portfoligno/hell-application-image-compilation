@@ -1,0 +1,7 @@
+#!/usr/bin/env hell
+
+main = do
+  arguments <- Environment.getArgs
+  ByteString.hPutStr IO.stdout
+    (Json.encode (Json.Array (Vector.fromList (List.map Json.String arguments))))
+  Text.putStrLn ""

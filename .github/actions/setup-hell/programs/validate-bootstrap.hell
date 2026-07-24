@@ -1,0 +1,261 @@
+#!/usr/bin/env hell
+data Opts = Opts {
+  runnerArch :: Text,
+  binary :: Text,
+  archive :: Text,
+  trust :: Text,
+  archiveChecksum :: Text,
+  binaryChecksum :: Text,
+  cacheHit :: Text,
+  state :: Text
+  }
+
+options =
+  (\runnerArch binary archive trust archiveChecksum binaryChecksum cacheHit state ->
+    Main.Opts { runnerArch, binary, archive, trust, archiveChecksum, binaryChecksum, cacheHit, state })
+  <$> Options.strOption (Option.long "runner-arch")
+  <*> Options.strOption (Option.long "binary")
+  <*> Options.strOption (Option.long "archive")
+  <*> Options.strOption (Option.long "trust")
+  <*> Options.strOption (Option.long "archive-checksum")
+  <*> Options.strOption (Option.long "binary-checksum")
+  <*> Options.strOption (Option.long "cache-hit")
+  <*> Options.strOption (Option.long "state")
+
+die = \message -> Exit.die $ Text.concat ["setup-hell validation failed: ", message]
+
+require = \condition message ->
+  if condition then Applicative.pure () else Main.die message
+
+and = \left right -> if left then right else Bool.False
+
+object = \value ->
+  case value of
+    Json.Object fields -> Applicative.pure fields
+    _ -> Main.die "expected JSON object"
+
+field = \name fields ->
+  Maybe.maybe (Main.die $ Text.concat ["missing JSON field: ", name]) Applicative.pure
+    $ Map.lookup name fields
+
+stringField = \name fields -> do
+  value <- Main.field name fields
+  case value of
+    Json.String text -> Applicative.pure text
+    _ -> Main.die $ Text.concat ["expected string field: ", name]
+
+numberField = \name fields -> do
+  value <- Main.field name fields
+  case value of
+    Json.Number number -> Applicative.pure number
+    _ -> Main.die $ Text.concat ["expected number field: ", name]
+
+readJson = \path -> do
+  bytes <- ByteString.readFile path
+  Maybe.maybe (Main.die $ Text.concat ["invalid JSON: ", path]) Applicative.pure
+    $ Json.decode bytes
+
+run = \command arguments -> do
+  (code, out, err) <- Text.readProcess $ Process.proc command arguments
+  Main.require (Eq.eq code Exit.ExitSuccess)
+    (Text.concat ["command failed: ", command, "\n", err])
+  Main.require (Eq.eq err "") $ Text.concat ["command wrote stderr: ", command]
+  Applicative.pure out
+
+lowerHex = \text ->
+  Main.and (Eq.eq (Text.length text) 64)
+    (Text.all (\character -> List.elem character ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']) text)
+
+checksumFromOutput = \output ->
+  if Main.lowerHex (Text.take 64 output)
+       then Applicative.pure $ Text.take 64 output
+       else Main.die "sha256sum returned no digest"
+
+noControl = \text ->
+  Main.and (Bool.not $ Text.isInfixOf "\n" text) (Bool.not $ Text.isInfixOf "\r" text)
+
+buildIdentity = \buildInfo ->
+  case buildInfo of
+    Json.Object fields ->
+      Maybe.maybe "" (\value ->
+        Json.value "" (\boolean -> "") (\text -> text) (\number -> "") (\array -> "") (\objectFields -> "") value)
+        $ Map.lookup "buildIdentity" fields
+    _ -> ""
+
+memberName = \value -> do
+  fields <- Main.object value
+  Main.stringField "name" fields
+
+memberNames = \value ->
+  case value of
+    Json.Array values -> Monad.mapM Main.memberName $ Vector.toList values
+    _ -> Main.die "archive members must be an array"
+
+normalizedCacheHit = \value -> if Eq.eq value "true" then "true" else "false"
+
+main = do
+  opts <- Options.execParser $ Options.info (Main.options <**> Options.helper) Options.fullDesc
+  let runnerArch = Record.get @"runnerArch" opts
+  let binary = Record.get @"binary" opts
+  let archive = Record.get @"archive" opts
+  let trustPath = Record.get @"trust" opts
+  let archiveChecksum = Record.get @"archiveChecksum" opts
+  let binaryChecksum = Record.get @"binaryChecksum" opts
+  let cacheHit = Record.get @"cacheHit" opts
+  let statePath = Record.get @"state" opts
+  Main.require (List.elem runnerArch ["X64", "ARM64"]) "unsupported runner architecture"
+  Main.require (List.elem cacheHit ["true", "false", ""]) "invalid cache-hit value"
+  Monad.mapM_ (\value -> Main.require (Main.noControl value) "control character in argument")
+    [binary, archive, trustPath, archiveChecksum, binaryChecksum, statePath]
+  symbolic <- Directory.pathIsSymbolicLink binary
+  Main.require (Bool.not symbolic) "installed binary is a symbolic link"
+  exists <- Directory.doesFileExist binary
+  Main.require exists "installed binary is not an ordinary file"
+
+  trustValue <- Main.readJson trustPath
+  trustFields <- Main.object trustValue
+  Main.require (Eq.eq (Set.fromList $ Map.keys trustFields)
+    (Set.fromList ["schemaVersion","repository","tag","commit","runnerArch","target","archive","binary","version","buildInfo","provenance"]))
+    "unexpected top-level trust fields"
+  schemaVersion <- Main.numberField "schemaVersion" trustFields
+  Main.require (Eq.eq schemaVersion 1.0) "unsupported trust schema"
+  repository <- Main.stringField "repository" trustFields
+  tag <- Main.stringField "tag" trustFields
+  trustArch <- Main.stringField "runnerArch" trustFields
+  expectedVersion <- Main.stringField "version" trustFields
+  expectedBuildInfo <- Main.field "buildInfo" trustFields
+  commit <- Main.stringField "commit" trustFields
+  let expectedArch = if Eq.eq runnerArch "X64" then "x86_64" else "aarch64"
+  Main.require (Eq.eq repository "Portfoligno/hell-application-image-compilation") "wrong repository"
+  Main.require (Eq.eq tag "application-image-compilation/v1.0.0") "wrong tag"
+  Main.require (Eq.eq trustArch runnerArch) "runner/trust architecture mismatch"
+  Main.require (Main.lowerHex commit) "invalid tagged commit"
+  Main.require (Eq.eq expectedVersion "Hell 2026-05-29 — Application Image Compilation 1.0.0") "wrong public identity"
+  targetValue <- Main.field "target" trustFields
+  targetFields <- Main.object targetValue
+  targetOs <- Main.stringField "os" targetFields
+  targetArch <- Main.stringField "arch" targetFields
+  targetLinkage <- Main.stringField "linkage" targetFields
+  Main.require (Eq.eq targetOs "linux") "trust target OS must be linux"
+  Main.require (Eq.eq targetArch expectedArch) "trust target architecture mismatch"
+  Main.require (Eq.eq targetLinkage "static") "trust target linkage must be static"
+
+  buildInfoFields <- Main.object expectedBuildInfo
+  Main.require (Eq.eq (Set.fromList $ Map.keys buildInfoFields)
+    (Set.fromList ["baseline","feature","applicationImage","compiler","target","buildIdentity"]))
+    "unexpected build-info trust fields"
+  baselineValue <- Main.field "baseline" buildInfoFields
+  baselineFields <- Main.object baselineValue
+  baselineName <- Main.stringField "name" baselineFields
+  baselineVersion <- Main.stringField "version" baselineFields
+  Main.require (Eq.eq baselineName "Hell") "wrong build-info baseline name"
+  Main.require (Eq.eq baselineVersion "2026-05-29") "wrong build-info baseline version"
+  featureValue <- Main.field "feature" buildInfoFields
+  featureFields <- Main.object featureValue
+  featureName <- Main.stringField "name" featureFields
+  featureVersion <- Main.stringField "version" featureFields
+  Main.require (Eq.eq featureName "Application Image Compilation") "wrong build-info feature"
+  Main.require (Eq.eq featureVersion "1.0.0") "wrong build-info feature version"
+  imageValue <- Main.field "applicationImage" buildInfoFields
+  imageFields <- Main.object imageValue
+  formatVersion <- Main.numberField "formatVersion" imageFields
+  abiVersion <- Main.numberField "abiVersion" imageFields
+  fingerprint <- Main.stringField "compatibilityFingerprint" imageFields
+  Main.require (Eq.eq formatVersion 2.0) "wrong application-image format"
+  Main.require (Eq.eq abiVersion 2.0) "wrong application-image ABI"
+  Main.require (Eq.eq fingerprint "c5fd3286e5ebd3c8") "wrong compatibility fingerprint"
+  buildTargetValue <- Main.field "target" buildInfoFields
+  buildTargetFields <- Main.object buildTargetValue
+  buildTargetOs <- Main.stringField "os" buildTargetFields
+  buildTargetArch <- Main.stringField "arch" buildTargetFields
+  buildTargetLinkage <- Main.stringField "linkage" buildTargetFields
+  Main.require (Eq.eq buildTargetOs targetOs) "build-info target OS mismatch"
+  Main.require (Eq.eq buildTargetArch targetArch) "build-info target architecture mismatch"
+  Main.require (Eq.eq buildTargetLinkage targetLinkage) "build-info target linkage mismatch"
+  exactBuildIdentity <- Main.stringField "buildIdentity" buildInfoFields
+  Main.require (Bool.not $ Eq.eq exactBuildIdentity "") "empty build identity"
+
+  archiveValue <- Main.field "archive" trustFields
+  archiveFields <- Main.object archiveValue
+  binaryValue <- Main.field "binary" trustFields
+  binaryFields <- Main.object binaryValue
+  expectedArchiveDigest <- Main.stringField "sha256" archiveFields
+  expectedBinaryDigest <- Main.stringField "sha256" binaryFields
+  expectedArchiveName <- Main.stringField "name" archiveFields
+  expectedMembersValue <- Main.field "members" archiveFields
+  expectedMembers <- Main.memberNames expectedMembersValue
+  expectedMember <- Main.stringField "member" binaryFields
+  Main.require (Main.lowerHex expectedArchiveDigest) "invalid archive digest"
+  Main.require (Main.lowerHex expectedBinaryDigest) "invalid binary digest"
+  Main.require (Text.isSuffixOf expectedArchiveName archive) "archive path/name mismatch"
+  Main.require (Text.isSuffixOf "/hell" expectedMember) "unexpected binary member"
+
+  Process.runProcess_ $ Process.proc "/usr/bin/sha256sum" ["--check", "--strict", archiveChecksum]
+  archiveOutput <- Main.run "/usr/bin/sha256sum" [archive]
+  actualArchiveDigest <- Main.checksumFromOutput archiveOutput
+  Main.require (Eq.eq actualArchiveDigest expectedArchiveDigest) "archive digest differs from trust JSON"
+  binaryOutput <- Main.run "/usr/bin/sha256sum" [binary]
+  actualBinaryDigest <- Main.checksumFromOutput binaryOutput
+  Main.require (Eq.eq actualBinaryDigest expectedBinaryDigest) "installed binary digest differs from trust JSON"
+  checksumText <- Text.readFile binaryChecksum
+  Main.require (Text.isPrefixOf expectedBinaryDigest checksumText) "member checksum file differs from trust JSON"
+
+  statOutput <- Main.run "/usr/bin/stat" ["--format=%F:%a", "--", binary]
+  Main.require (Eq.eq statOutput "regular file:755\n") "installed binary must be regular mode 0755"
+  members <- Main.run "/usr/bin/tar" ["--list", "--file", archive]
+  let memberLines = Text.lines members
+  Main.require (Eq.eq (List.length memberLines) 4) "archive must contain exactly four members"
+  Main.require (List.elem expectedMember memberLines) "archive is missing the reviewed Hell member"
+  Main.require (Eq.eq (Set.size $ Set.fromList memberLines) 4) "archive contains duplicate members"
+  Main.require (Eq.eq (Set.fromList memberLines) (Set.fromList expectedMembers))
+    "archive member names differ from the reviewed contract"
+  Monad.mapM_ (\member -> do
+    Main.require (Bool.not $ Text.isPrefixOf "/" member) "absolute archive member"
+    Main.require (Bool.not $ List.elem ".." $ Text.splitOn "/" member) "parent traversal archive member")
+    memberLines
+  verboseMembers <- Main.run "/usr/bin/tar"
+    ["--list", "--verbose", "--numeric-owner", "--file", archive]
+  Monad.mapM_ (\line -> do
+    Main.require (List.or [Text.isPrefixOf "drwxr-xr-x" line, Text.isPrefixOf "-rwxr-xr-x" line,
+                          Text.isPrefixOf "-rw-r--r--" line])
+      "archive member has forbidden type or mode"
+    Main.require (Text.isInfixOf " 0/0 " line) "archive member is not owned by numeric 0/0"
+    if Text.isSuffixOf "/hell" line
+      then Main.require (Text.isPrefixOf "-rwxr-xr-x" line) "Hell member mode must be 0755"
+      else if Text.isSuffixOf "/" line
+        then Main.require (Text.isPrefixOf "drwxr-xr-x" line) "archive directory mode must be 0755"
+        else Main.require (Text.isPrefixOf "-rw-r--r--" line) "archive document mode must be 0644")
+    (Text.lines verboseMembers)
+
+  version <- Main.run binary ["--version"]
+  Main.require (Eq.eq version $ Text.concat [expectedVersion, "\n"]) "exact version output mismatch"
+  buildInfoOutput <- Main.run binary ["--build-info=json"]
+  buildInfo <- Maybe.maybe (Main.die "invalid --build-info=json output") Applicative.pure
+    $ Json.decode $ Text.encodeUtf8 buildInfoOutput
+  Main.require (Eq.eq (Json.encode buildInfo) (Json.encode expectedBuildInfo)) "complete build-info mismatch"
+
+  Process.runProcess_ $ Process.proc "gh" ["release", "verify", tag, "--repo", repository]
+  Process.runProcess_ $ Process.proc "gh" ["release", "verify-asset", tag, archive, "--repo", repository]
+  provenanceValue <- Main.field "provenance" trustFields
+  provenanceFields <- Main.object provenanceValue
+  sourceRef <- Main.stringField "sourceRef" provenanceFields
+  sourceDigest <- Main.stringField "sourceDigest" provenanceFields
+  signerWorkflow <- Main.stringField "signerWorkflow" provenanceFields
+  Main.require (Eq.eq sourceDigest commit) "provenance source digest mismatch"
+  Process.runProcess_ $ Process.proc "gh"
+    ["attestation","verify",archive,"--repo",repository,"--signer-workflow",signerWorkflow,
+     "--source-ref",sourceRef,"--source-digest",sourceDigest,
+     "--predicate-type","https://slsa.dev/provenance/v1","--deny-self-hosted-runners"]
+  Process.runProcess_ $ Process.proc "gh"
+    ["attestation","verify",archive,"--repo",repository,"--signer-workflow",signerWorkflow,
+     "--source-ref",sourceRef,"--source-digest",sourceDigest,
+     "--predicate-type","https://spdx.dev/Document/v2.3","--deny-self-hosted-runners"]
+
+  ByteString.writeFile statePath $ Json.encode $ Json.Object $ Map.fromList [
+    ("schemaVersion", Json.Number 1.0),
+    ("binary", Json.String binary),
+    ("archiveSha256", Json.String actualArchiveDigest),
+    ("binarySha256", Json.String actualBinaryDigest),
+    ("buildIdentity", Json.String $ Main.buildIdentity expectedBuildInfo),
+    ("cacheHit", Json.String $ Main.normalizedCacheHit cacheHit)
+    ]

@@ -1,6 +1,43 @@
-# Generate bindist:
+# GitHub-only native static releases
 
-nix build .#static-arm64 -o hell-linux-arm64-dir
-cp ./hell-linux-arm64-dir/bin/hell hell-linux-arm64
-nix build .#static-amd64 -o hell-linux-amd64-dir
-cp ./hell-linux-amd64-dir/bin/hell hell-linux-amd64
+The canonical release identity is defined in `release/versions.json`.
+
+Official release tag:
+
+    application-image-compilation/v1.0.0
+
+Official release repository:
+
+    https://github.com/Portfoligno/hell-application-image-compilation/releases
+
+The protected tag workflow builds exactly two native static archives:
+
+    hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+    hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+
+The x86_64 archive is built and executed on `ubuntu-24.04`. The aarch64
+archive is built and executed on GitHub's native `ubuntu-24.04-arm` runner.
+Cross-built output is never published as a release asset.
+
+For a local native release-candidate build:
+
+    nix build --no-update-lock-file .#release-static-native --out-link result-release
+
+That command does not publish and does not make the result an official
+artifact. Official publication requires an annotated protected tag on green
+`main`, a tag workflow that creates or verifies a draft containing exactly six
+assets, maintainer review, the Releases page **Publish release** button, and
+successful read-only post-publication verification.
+
+Consumer verification:
+
+    sha256sum --check SHA256SUMS
+    gh attestation verify <archive> -R Portfoligno/hell-application-image-compilation
+    gh release verify application-image-compilation/v1.0.0 \
+      -R Portfoligno/hell-application-image-compilation
+
+Repository owners must enable immutable releases, protect `main`, restrict
+creation/update/deletion of `application-image-compilation/v*` tags, require
+the `metadata`, `test (x86_64-linux)`, and `test (aarch64-linux)` checks, and
+configure Pages for GitHub Actions. No Actions `release` environment is used:
+only a maintainer may publish a reviewed draft from the Releases page.

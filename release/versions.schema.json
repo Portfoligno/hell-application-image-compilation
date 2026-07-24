@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Portfoligno/hell-application-image-compilation/blob/main/release/versions.schema.json",
+  "title": "Hell Application Image Compilation release identities",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "featureRelease",
+    "upstreamRuntime",
+    "imageCompatibility"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./versions.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "featureRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "slug",
+        "package",
+        "version",
+        "tag",
+        "artifactStem"
+        ,
+        "title",
+        "notes",
+        "assets",
+        "targets"
+      ],
+      "properties": {
+        "name": {
+          "const": "Application Image Compilation"
+        },
+        "slug": {
+          "const": "application-image-compilation"
+        },
+        "package": {
+          "const": "hell-application-image-compilation"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "tag": {
+          "const": "application-image-compilation/v1.0.0"
+        },
+        "artifactStem": {
+          "const": "hell-application-image-compilation-1.0.0-hell-2026-05-29"
+        },
+        "title": {
+          "const": "Hell 2026-05-29 — Application Image Compilation 1.0.0"
+        },
+        "notes": {
+          "const": "release/notes-1.0.0.md"
+        },
+        "assets": {
+          "const": [
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
+            "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
+            "release.json",
+            "SHA256SUMS"
+          ]
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "architecture",
+              "nixSystem",
+              "runner",
+              "archive",
+              "archiveRoot",
+              "sbom",
+              "fragment"
+            ],
+            "properties": {
+              "architecture": { "enum": ["x86_64", "aarch64"] },
+              "nixSystem": { "enum": ["x86_64-linux", "aarch64-linux"] },
+              "runner": { "enum": ["ubuntu-24.04", "ubuntu-24.04-arm"] },
+              "archive": { "type": "string" },
+              "archiveRoot": { "type": "string" },
+              "sbom": { "type": "string" },
+              "fragment": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "upstreamRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "Hell"
+        },
+        "version": {
+          "const": "2026-05-29"
+        }
+      }
+    },
+    "imageCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formatVersion",
+        "abiVersion",
+        "compatibilityFingerprint"
+      ],
+      "properties": {
+        "formatVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "abiVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compatibilityFingerprint": {
+          "const": "c5fd3286e5ebd3c8"
+        }
+      }
+    }
+  }
+}

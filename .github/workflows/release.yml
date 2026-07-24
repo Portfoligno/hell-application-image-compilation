@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "application-image-compilation/v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out annotated release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the native Hell automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Enforce repository automation policy
+        run: ./result-automation policy
+      - name: Validate fixed release metadata and tag identity
+        run: ./result-automation metadata --check
+      - name: Check exact hpack output
+        run: ./result-automation hpack-drift
+      - name: Check source distribution
+        run: ./result-automation check-sdist
+      - name: Check tagged documentation
+        run: ./result-automation check-docs
+      - name: Run native flake checks
+        run: nix flake check --no-update-lock-file --print-build-logs
+
+  build-static:
+    name: native release (${{ matrix.arch }})
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Build native static binary
+        run: nix build --no-update-lock-file .#static-native --out-link result-static
+      - name: Check native static runtime
+        env:
+          HELL_TARGET_ARCH: ${{ matrix.arch }}
+        run: ./result-automation check-runtime ./result-static/bin/hell "$HELL_TARGET_ARCH"
+      - name: Build deterministic architecture bundle
+        run: nix build --no-update-lock-file .#release-static-native --out-link result-release
+      - name: Rebuild architecture bundle
+        run: nix build --check --no-update-lock-file .#release-static-native
+      - name: Check exact architecture bundle
+        env:
+          HELL_TARGET_ARCH: ${{ matrix.arch }}
+        run: ./result-automation check-bundle ./result-release "$HELL_TARGET_ARCH"
+      - name: Upload commit-scoped native bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.arch }}-${{ github.sha }}
+          path: result-release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate-and-attest:
+    name: aggregate and attest
+    needs:
+      - metadata
+      - build-static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out release policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Download only this commit's native bundles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*-${{ github.sha }}
+          path: incoming
+          merge-multiple: true
+      - name: Aggregate exact six-asset release
+        env:
+          HELL_COMMIT_SHA: ${{ github.sha }}
+        run: ./result-automation aggregate incoming dist "$HELL_COMMIT_SHA"
+      - name: Attest archives and checksum manifest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+            dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+            dist/SHA256SUMS
+          create-storage-record: false
+      - name: Attest x86_64 SPDX
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+          sbom-path: dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json
+          create-storage-record: false
+      - name: Attest aarch64 SPDX
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+          sbom-path: dist/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json
+          create-storage-record: false
+      - name: Preserve staged release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staged-release-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  stage-draft:
+    name: create or verify draft
+    needs: aggregate-and-attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Check out reviewed release notes
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native automation image
+        run: nix build --no-update-lock-file .#automation --out-link result-automation
+      - name: Download staged assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: staged-release-${{ github.sha }}
+          path: dist
+      - name: Create or verify immutable-release-ready draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./result-automation stage-draft dist

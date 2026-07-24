@@ -3,7 +3,7 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hell: Shell scripting Haskell dialect</title>
+    <title>Hell 2026-05-29 — Application Image Compilation 1.0.0</title>
     <style>
       body {
       max-width: 40em;
@@ -97,16 +97,29 @@
   <body>
     <div class="page-wrap">
 <header>
-<h1>Hell: Shell scripting Haskell dialect</h1>
+<h1>Hell 2026-05-29 — Application Image Compilation 1.0.0</h1>
 
 <nav><a href="api">API documentation</a>
   | <a href="examples">Examples</a>
-  | <a href="https://github.com/chrisdone/hell/releases">Releases</a>
+  | <a href="https://github.com/Portfoligno/hell-application-image-compilation/releases">Releases</a>
+  | <a href="https://github.com/Portfoligno/hell-application-image-compilation">Source</a>
   | <a href="https://chrisdone.com/posts/tour-of-hell/">Design</a></nav>
 </header>
-<p>Hell is a shell
-scripting language that is a tiny dialect of Haskell that I wrote for my
-  own shell scripting purposes.</p>
+<p>Hell is a shell scripting language created by Chris Done as a tiny dialect
+of Haskell. This site documents an independently maintained fork based on
+upstream Hell <code>2026-05-29</code>. It is not an official upstream release
+and does not imply upstream endorsement.</p>
+
+<h2>Application Image Compilation 1.0.0</h2>
+
+<p>On Linux, <code>hell --compile SCRIPT --output PROGRAM</code> emits an
+executable application image containing a checked, pre-inferred Hell program.
+The image inherits the emitting runtime's architecture and static or dynamic
+linkage. It is not cross-compilation, native machine-code compilation, source
+protection, or a sandbox. See the
+<a href="https://github.com/Portfoligno/hell-application-image-compilation#application-image-compilation">fork
+README</a> for usage, limitations, redistribution obligations, and current
+experimental status.</p>
 
 <div class="sourceCode" id="cb1"><pre
 class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#!/usr/bin/env hell</span></span>
@@ -129,10 +142,10 @@ needed for e.g. List.lookup and familiar equality things.</li>
 Async.race, etc.) that are already used in Haskell.</li>
 </ul>
 
-<p>See also my <a
-href="https://chrisdone.com/posts/hell/">first</a>, 
+<p>For the upstream design history, see Chris Done's <a
+href="https://chrisdone.com/posts/hell/">first</a>,
   <a
-href="https://chrisdone.com/posts/variants/">second<a>,
+href="https://chrisdone.com/posts/variants/">second</a>,
  <a
 href="https://chrisdone.com/posts/hell-year-in-review-2025/">third</a>, and
   <a
@@ -141,7 +154,14 @@ href="https://chrisdone.com/posts/hell-year-in-review-2026/">fourth</a> blog pos
 <footer>
   <table style="width:100%">
     <tr>
-      <td>© 2026 <a href="https://chrisdone.com">Chris Done</a></td>
+      <td>Original project by
+        <a href="https://github.com/chrisdone/hell">Chris Done</a>
+        · <a href="https://github.com/Portfoligno/hell-application-image-compilation/blob/main/FORK.md">fork provenance</a>
+        · <a href="https://github.com/Portfoligno/hell-application-image-compilation/blob/main/SUPPORT.md">support</a>
+        · <a href="https://github.com/Portfoligno/hell-application-image-compilation/blob/main/SECURITY.md">security</a>
+        · <a href="https://github.com/Portfoligno/hell-application-image-compilation">source</a>
+        · <a href="https://github.com/Portfoligno/hell-application-image-compilation/blob/main/LICENSE">BSD-3-Clause</a>
+      </td>
     </tr>
   </table>
 </footer>

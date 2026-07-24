@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Portfoligno/hell-application-image-compilation/blob/main/release/release-manifest.schema.json",
+  "title": "Application Image Compilation GitHub release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "repository",
+    "commit",
+    "tag",
+    "release",
+    "upstreamRuntime",
+    "imageCompatibility",
+    "artifacts",
+    "validation"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://github.com/Portfoligno/hell-application-image-compilation/blob/main/release/release-manifest.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "repository": {
+      "const": "Portfoligno/hell-application-image-compilation"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "tag": {
+      "const": "application-image-compilation/v1.0.0"
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "feature",
+        "version",
+        "package"
+      ],
+      "properties": {
+        "feature": {
+          "const": "Application Image Compilation"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "package": {
+          "const": "hell-application-image-compilation"
+        }
+      }
+    },
+    "upstreamRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "Hell"
+        },
+        "version": {
+          "const": "2026-05-29"
+        }
+      }
+    },
+    "imageCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formatVersion",
+        "abiVersion",
+        "compatibilityFingerprint"
+      ],
+      "properties": {
+        "formatVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "abiVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compatibilityFingerprint": {
+          "const": "c5fd3286e5ebd3c8"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nativeRunner",
+        "rawExecution",
+        "compiledImageExecution",
+        "arguments",
+        "boundedPool",
+        "corruptionRejected",
+        "staticElf",
+        "reproducibleArchivePackaging"
+      ],
+      "properties": {
+        "nativeRunner": {
+          "const": true
+        },
+        "rawExecution": {
+          "const": true
+        },
+        "compiledImageExecution": {
+          "const": true
+        },
+        "arguments": {
+          "const": true
+        },
+        "boundedPool": {
+          "const": true
+        },
+        "corruptionRejected": {
+          "const": true
+        },
+        "staticElf": {
+          "const": true
+        },
+        "reproducibleArchivePackaging": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digestAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "toolchain",
+        "buildIdentity",
+        "archive",
+        "sbom"
+      ],
+      "properties": {
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "os",
+            "arch",
+            "nixSystem",
+            "linkage"
+          ],
+          "properties": {
+            "os": {
+              "const": "linux"
+            },
+            "arch": {
+              "enum": [
+                "x86_64",
+                "aarch64"
+              ]
+            },
+            "nixSystem": {
+              "enum": [
+                "x86_64-linux",
+                "aarch64-linux"
+              ]
+            },
+            "linkage": {
+              "const": "static"
+            }
+          }
+        },
+        "toolchain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ghcVersion",
+            "nixVersion",
+            "flakeLockSha256"
+            ,
+            "flakeInputs",
+            "componentInventoryScope",
+            "components"
+          ],
+          "properties": {
+            "ghcVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nixVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "flakeLockSha256": {
+              "type": "string"
+            },
+            "flakeInputs": {
+              "type": "object",
+              "required": [
+                "root",
+                "nixpkgs",
+                "flake-utils"
+              ],
+              "properties": {
+                "nixpkgs": {
+                  "$ref": "#/$defs/flakeNode"
+                },
+                "flake-utils": {
+                  "$ref": "#/$defs/flakeNode"
+                }
+              }
+            },
+            "componentInventoryScope": {
+              "const": "complete-direct-cabal-dependencies-and-linked-native-components"
+            },
+            "components": {
+              "type": "array",
+              "minItems": 5,
+              "items": {
+                "$ref": "#/$defs/component"
+              }
+            }
+          }
+        },
+        "buildIdentity": {
+          "type": "string"
+        },
+        "archive": {
+          "$ref": "#/$defs/digestAsset"
+        },
+        "sbom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256",
+            "size",
+            "format"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "format": {
+              "const": "SPDX-2.3"
+            }
+          }
+        }
+      }
+    },
+    "flakeNode": {
+      "type": "object",
+      "required": [
+        "locked"
+      ],
+      "properties": {
+        "locked": {
+          "type": "object",
+          "required": [
+            "narHash",
+            "rev"
+          ],
+          "properties": {
+            "narHash": {
+              "type": "string"
+            },
+            "rev": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "version",
+        "storePath"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "direct-cabal-dependency",
+            "linked-component"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "storePath": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
