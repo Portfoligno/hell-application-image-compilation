@@ -9,6 +9,12 @@ env = \name -> do
   Maybe.maybe (Exit.die (Text.concat ["missing fake-gh env: ", name])) IO.pure
     (List.lookup name values)
 
+joinPath = \parent child ->
+  Maybe.maybe
+    (Text.concat [parent, "/", child])
+    (\without -> Text.concat [without, "/", child])
+    (Text.stripSuffix "/" parent)
+
 main = do
   arguments <- Environment.getArgs
   mode <- Main.env "FAKE_GH_MODE"
@@ -35,8 +41,8 @@ main = do
         names <- Directory.listDirectory remote
         Monad.forM_ names \name ->
           Directory.copyFile
-            (Text.concat [remote, "/", name])
-            (Text.concat [output, "/", name])
+            (Main.joinPath remote name)
+            (Main.joinPath output name)
     else if List.and [Eq.eq family "release", Eq.eq operation "upload"]
       then do
         remote <- Main.env "FAKE_GH_REMOTE"
@@ -51,7 +57,7 @@ main = do
         let matching = List.filter (\name -> Text.isSuffixOf name source) names
         let name = Maybe.maybe (Error.error "unknown uploaded asset") Function.id
               (Maybe.listToMaybe matching)
-        Directory.copyFile source (Text.concat [remote, "/", name])
+        Directory.copyFile source (Main.joinPath remote name)
     else if List.and [Eq.eq family "release", Eq.eq operation "verify"]
       then IO.pure ()
     else if Eq.eq family "attestation"

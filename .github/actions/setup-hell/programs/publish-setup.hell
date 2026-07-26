@@ -1,11 +1,4 @@
 #!/usr/bin/env hell
-data Opts = Opts { state :: Text, binary :: Text, binDir :: Text }
-
-options =
-  (\state binary binDir -> Main.Opts { state, binary, binDir })
-  <$> Options.strOption (Option.long "state")
-  <*> Options.strOption (Option.long "binary")
-  <*> Options.strOption (Option.long "bin-dir")
 
 die = \message -> Exit.die $ Text.concat ["setup-hell publication failed: ", message]
 
@@ -34,8 +27,11 @@ environment = \name environment ->
     $ List.lookup name environment
 
 main = do
-  opts <- Options.execParser $ Options.info (Main.options <**> Options.helper) Options.fullDesc
-  bytes <- ByteString.readFile $ Record.get @"state" opts
+  environmentValues <- Environment.getEnvironment
+  state <- Main.environment "HELL_SETUP_STATE" environmentValues
+  binary <- Main.environment "HELL_SETUP_BINARY" environmentValues
+  binDir <- Main.environment "HELL_SETUP_BIN_DIR" environmentValues
+  bytes <- ByteString.readFile state
   value <- Maybe.maybe (Main.die "invalid validated state JSON") Applicative.pure $ Json.decode bytes
   fields <- case value of
     Json.Object objectFields -> Applicative.pure objectFields
@@ -48,8 +44,6 @@ main = do
   binarySha256 <- Main.string "binarySha256" fields
   buildIdentity <- Main.string "buildIdentity" fields
   cacheHit <- Main.string "cacheHit" fields
-  let binary = Record.get @"binary" opts
-  let binDir = Record.get @"binDir" opts
   Main.require (Eq.eq stateBinary binary) "validated binary path mismatch"
   symbolic <- Directory.pathIsSymbolicLink binary
   Main.require (Bool.not symbolic) "validated binary became a symbolic link"
@@ -58,9 +52,8 @@ main = do
   Main.require (Text.isPrefixOf binarySha256 hashOutput) "validated binary changed"
   Monad.mapM_ (\item -> Main.require (Main.safe item) "unsafe output value")
     [binary, binDir, cacheHit, archiveSha256, buildIdentity]
-  env <- Environment.getEnvironment
-  githubPath <- Main.environment "GITHUB_PATH" env
-  githubOutput <- Main.environment "GITHUB_OUTPUT" env
+  githubPath <- Main.environment "GITHUB_PATH" environmentValues
+  githubOutput <- Main.environment "GITHUB_OUTPUT" environmentValues
   Text.appendFile githubPath $ Text.concat [binDir, "\n"]
   Text.appendFile githubOutput $ Text.unlines [
     Text.concat ["hell-path=", binary],

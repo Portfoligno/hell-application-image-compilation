@@ -32,142 +32,142 @@ runs:
       run: /usr/bin/false
 
     - name: Require reviewed published pins
+      working-directory: ${{ github.action_path }}
       shell: sh
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: /usr/bin/test -f "$ACTION_PATH"/trust/READY
+      run: /usr/bin/test -f trust/READY
 
     - name: Create private bootstrap directories
+      working-directory: ${{ github.action_path }}
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/install -d -m 0755 "$RUNNER_TEMP"/hell-bootstrap/cache "$RUNNER_TEMP"/hell-bootstrap/stage "$RUNNER_TEMP"/hell-bootstrap/bin
+      run: /usr/bin/install -d -m 0755 cache stage bin
 
     - name: Restore exact X64 archive
       if: runner.arch == 'X64'
       id: restore-x64
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
-        path: ${{ runner.temp }}/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
-        key: hell-bootstrap-v1-Linux-X64-${{ github.action_ref }}-trust-schema-1-application-image-compilation-v1.0.0
+        path: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+        key: hell-bootstrap-unpublished-Linux-X64-no-reviewed-digests
 
     - name: Restore exact ARM64 archive
       if: runner.arch == 'ARM64'
       id: restore-arm64
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
-        path: ${{ runner.temp }}/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
-        key: hell-bootstrap-v1-Linux-ARM64-${{ github.action_ref }}-trust-schema-1-application-image-compilation-v1.0.0
+        path: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+        key: hell-bootstrap-unpublished-Linux-ARM64-no-reviewed-digests
 
     - name: Download X64 archive over constrained HTTPS
       if: runner.arch == 'X64' && steps.restore-x64.outputs.cache-hit != 'true'
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-redirs 5 --retry 3 --retry-all-errors --connect-timeout 30 --max-time 600 --output "$RUNNER_TEMP"/hell-bootstrap/cache/hell-x64.part https://github.com/Portfoligno/hell-application-image-compilation/releases/download/application-image-compilation%2Fv1.0.0/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+      run: /usr/bin/curl --fail --silent --show-error --location --proto =https --proto-redir =https --max-redirs 5 --retry 3 --retry-all-errors --connect-timeout 30 --max-time 600 --output hell-x64.part https://github.com/Portfoligno/hell-application-image-compilation/releases/download/application-image-compilation%2Fv1.0.0/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
 
     - name: Commit complete X64 download
       if: runner.arch == 'X64' && steps.restore-x64.outputs.cache-hit != 'true'
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/mv -- "$RUNNER_TEMP"/hell-bootstrap/cache/hell-x64.part "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+      run: /usr/bin/mv -- hell-x64.part hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
 
     - name: Download ARM64 archive over constrained HTTPS
       if: runner.arch == 'ARM64' && steps.restore-arm64.outputs.cache-hit != 'true'
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-redirs 5 --retry 3 --retry-all-errors --connect-timeout 30 --max-time 600 --output "$RUNNER_TEMP"/hell-bootstrap/cache/hell-arm64.part https://github.com/Portfoligno/hell-application-image-compilation/releases/download/application-image-compilation%2Fv1.0.0/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+      run: /usr/bin/curl --fail --silent --show-error --location --proto =https --proto-redir =https --max-redirs 5 --retry 3 --retry-all-errors --connect-timeout 30 --max-time 600 --output hell-arm64.part https://github.com/Portfoligno/hell-application-image-compilation/releases/download/application-image-compilation%2Fv1.0.0/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
 
     - name: Commit complete ARM64 download
       if: runner.arch == 'ARM64' && steps.restore-arm64.outputs.cache-hit != 'true'
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/mv -- "$RUNNER_TEMP"/hell-bootstrap/cache/hell-arm64.part "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+      run: /usr/bin/mv -- hell-arm64.part hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
 
     - name: Verify reviewed X64 archive digest
       if: runner.arch == 'X64'
-      working-directory: ${{ runner.temp }}/hell-bootstrap/cache
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: /usr/bin/sha256sum --check --strict "$ACTION_PATH"/trust/linux-X64.archive.sha256
+      run: /usr/bin/sha256sum --check --strict ../trust/linux-X64.archive.sha256
 
     - name: Verify reviewed ARM64 archive digest
       if: runner.arch == 'ARM64'
-      working-directory: ${{ runner.temp }}/hell-bootstrap/cache
+      working-directory: ${{ github.action_path }}/cache
       shell: sh
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: /usr/bin/sha256sum --check --strict "$ACTION_PATH"/trust/linux-ARM64.archive.sha256
+      run: /usr/bin/sha256sum --check --strict ../trust/linux-ARM64.archive.sha256
 
     - name: Extract only reviewed X64 Hell member
       if: runner.arch == 'X64'
+      working-directory: ${{ github.action_path }}
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/tar --extract --file "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz --directory "$RUNNER_TEMP"/hell-bootstrap/stage --strip-components=1 --no-same-owner --no-same-permissions -- hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static/hell
+      run: /usr/bin/tar --extract --file cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz --directory stage --strip-components=1 --no-same-owner --no-same-permissions -- hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static/hell
 
     - name: Extract only reviewed ARM64 Hell member
       if: runner.arch == 'ARM64'
+      working-directory: ${{ github.action_path }}
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/tar --extract --file "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz --directory "$RUNNER_TEMP"/hell-bootstrap/stage --strip-components=1 --no-same-owner --no-same-permissions -- hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static/hell
+      run: /usr/bin/tar --extract --file cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz --directory stage --strip-components=1 --no-same-owner --no-same-permissions -- hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static/hell
 
     - name: Verify reviewed X64 binary digest
       if: runner.arch == 'X64'
-      working-directory: ${{ runner.temp }}/hell-bootstrap/stage
+      working-directory: ${{ github.action_path }}/stage
       shell: sh
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: /usr/bin/sha256sum --check --strict "$ACTION_PATH"/trust/linux-X64.binary.sha256
+      run: /usr/bin/sha256sum --check --strict ../trust/linux-X64.binary.sha256
 
     - name: Verify reviewed ARM64 binary digest
       if: runner.arch == 'ARM64'
-      working-directory: ${{ runner.temp }}/hell-bootstrap/stage
+      working-directory: ${{ github.action_path }}/stage
       shell: sh
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: /usr/bin/sha256sum --check --strict "$ACTION_PATH"/trust/linux-ARM64.binary.sha256
+      run: /usr/bin/sha256sum --check --strict ../trust/linux-ARM64.binary.sha256
 
     - name: Install digest-verified Hell
+      working-directory: ${{ github.action_path }}/stage
       shell: sh
-      env:
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: /usr/bin/install -m 0755 "$RUNNER_TEMP"/hell-bootstrap/stage/hell "$RUNNER_TEMP"/hell-bootstrap/bin/hell
+      run: /usr/bin/install -m 0755 hell ../bin/hell
 
     - name: Validate X64 identity and trust in Hell
       if: runner.arch == 'X64'
       id: validate-x64
+      working-directory: ${{ github.action_path }}/programs
       shell: sh
       env:
-        ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ github.token }}
-        CACHE_HIT: ${{ steps.restore-x64.outputs.cache-hit }}
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: '"$RUNNER_TEMP"/hell-bootstrap/bin/hell "$ACTION_PATH"/programs/validate-bootstrap.hell --runner-arch X64 --binary "$RUNNER_TEMP"/hell-bootstrap/bin/hell --archive "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz --trust "$ACTION_PATH"/trust/linux-X64.json --archive-checksum "$ACTION_PATH"/trust/linux-X64.archive.sha256 --binary-checksum "$ACTION_PATH"/trust/linux-X64.binary.sha256 --cache-hit "$CACHE_HIT" --state "$RUNNER_TEMP"/hell-bootstrap/validated.json'
+        PATH: ${{ github.action_path }}/bin:/usr/bin:/bin
+        HELL_SETUP_RUNNER_ARCH: X64
+        HELL_SETUP_BINARY: ${{ github.action_path }}/bin/hell
+        HELL_SETUP_ARCHIVE: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+        HELL_SETUP_TRUST: ${{ github.action_path }}/trust/linux-X64.json
+        HELL_SETUP_ARCHIVE_CHECKSUM: ${{ github.action_path }}/trust/linux-X64.archive.sha256
+        HELL_SETUP_BINARY_CHECKSUM: ${{ github.action_path }}/trust/linux-X64.binary.sha256
+        HELL_SETUP_CACHE_HIT: ${{ steps.restore-x64.outputs.cache-hit }}
+        HELL_SETUP_STATE: ${{ github.action_path }}/validated.json
+      run: ./validate-bootstrap.hell
 
     - name: Validate ARM64 identity and trust in Hell
       if: runner.arch == 'ARM64'
       id: validate-arm64
+      working-directory: ${{ github.action_path }}/programs
       shell: sh
       env:
-        ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ github.token }}
-        CACHE_HIT: ${{ steps.restore-arm64.outputs.cache-hit }}
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: '"$RUNNER_TEMP"/hell-bootstrap/bin/hell "$ACTION_PATH"/programs/validate-bootstrap.hell --runner-arch ARM64 --binary "$RUNNER_TEMP"/hell-bootstrap/bin/hell --archive "$RUNNER_TEMP"/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz --trust "$ACTION_PATH"/trust/linux-ARM64.json --archive-checksum "$ACTION_PATH"/trust/linux-ARM64.archive.sha256 --binary-checksum "$ACTION_PATH"/trust/linux-ARM64.binary.sha256 --cache-hit "$CACHE_HIT" --state "$RUNNER_TEMP"/hell-bootstrap/validated.json'
+        PATH: ${{ github.action_path }}/bin:/usr/bin:/bin
+        HELL_SETUP_RUNNER_ARCH: ARM64
+        HELL_SETUP_BINARY: ${{ github.action_path }}/bin/hell
+        HELL_SETUP_ARCHIVE: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+        HELL_SETUP_TRUST: ${{ github.action_path }}/trust/linux-ARM64.json
+        HELL_SETUP_ARCHIVE_CHECKSUM: ${{ github.action_path }}/trust/linux-ARM64.archive.sha256
+        HELL_SETUP_BINARY_CHECKSUM: ${{ github.action_path }}/trust/linux-ARM64.binary.sha256
+        HELL_SETUP_CACHE_HIT: ${{ steps.restore-arm64.outputs.cache-hit }}
+        HELL_SETUP_STATE: ${{ github.action_path }}/validated.json
+      run: ./validate-bootstrap.hell
 
-    - name: Publish PATH and outputs from validated state in Hell
+    - name: Publish outputs from validated state in Hell
       id: publish
+      working-directory: ${{ github.action_path }}/programs
       shell: sh
       env:
-        ACTION_PATH: ${{ github.action_path }}
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: '"$RUNNER_TEMP"/hell-bootstrap/bin/hell "$ACTION_PATH"/programs/publish-setup.hell --state "$RUNNER_TEMP"/hell-bootstrap/validated.json --binary "$RUNNER_TEMP"/hell-bootstrap/bin/hell --bin-dir "$RUNNER_TEMP"/hell-bootstrap/bin'
+        PATH: ${{ github.action_path }}/bin:/usr/bin:/bin
+        HELL_SETUP_STATE: ${{ github.action_path }}/validated.json
+        HELL_SETUP_BINARY: ${{ github.action_path }}/bin/hell
+        HELL_SETUP_BIN_DIR: ${{ github.action_path }}/bin
+      run: ./publish-setup.hell
 
     - name: Verify PATH execution
       id: path-smoke
@@ -178,12 +178,12 @@ runs:
       if: always() && runner.arch == 'X64' && steps.restore-x64.outputs.cache-hit != 'true' && steps.validate-x64.outcome == 'success' && steps.path-smoke.outcome == 'success'
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
-        path: ${{ runner.temp }}/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
+        path: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz
         key: ${{ steps.restore-x64.outputs.cache-primary-key }}
 
     - name: Save fully verified ARM64 archive
       if: always() && runner.arch == 'ARM64' && steps.restore-arm64.outputs.cache-hit != 'true' && steps.validate-arm64.outcome == 'success' && steps.path-smoke.outcome == 'success'
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
-        path: ${{ runner.temp }}/hell-bootstrap/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
+        path: ${{ github.action_path }}/cache/hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz
         key: ${{ steps.restore-arm64.outputs.cache-primary-key }}

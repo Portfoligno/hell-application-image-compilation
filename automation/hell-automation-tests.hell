@@ -3,6 +3,14 @@
 assert = \condition message ->
   if condition then IO.pure () else Exit.die message
 
+joinPath = \parent child ->
+  Maybe.maybe
+    (Text.concat [parent, "/", child])
+    (\without -> Text.concat [without, "/", child])
+    (Text.stripSuffix "/" parent)
+
+addExtension = \path extension -> Text.concat [path, extension]
+
 lowerHex = \width value ->
   List.and
     [ Eq.eq (Text.length value) width,
@@ -17,6 +25,19 @@ safeArchiveMember = \root member ->
     [ Text.isPrefixOf root member,
       Bool.not (Text.isPrefixOf "/" member),
       Bool.not (List.elem ".." (Text.splitOn "/" member))
+    ]
+
+staticBinaryPlacementValid = \source ->
+  List.and
+    [ Eq.eq (List.length (Text.splitOn "HELL_STATIC_BINARY =" source)) 2,
+      Eq.eq (List.length (Text.splitOn "releaseStaticNative =" source)) 2,
+      Text.isInfixOf
+        "HELL_STATIC_BINARY ="
+        (Maybe.maybe
+          ""
+          Function.id
+          (Maybe.listToMaybe
+            (List.drop 1 (Text.splitOn "releaseStaticNative =" source))))
     ]
 
 env = \name -> do
@@ -35,37 +56,658 @@ expectFailure = \process message -> do
   (code, _out, _err) <- Text.readProcess process
   Main.assert (Bool.not (Eq.eq code Exit.ExitSuccess)) message
 
+expectPolicyMutationFailure =
+  \automation root path original mutated findPath statPath message -> do
+    Text.writeFile (Main.joinPath root path) mutated
+    process <- Main.withEnvironment
+      [("HELL_TOOL_FIND", findPath), ("HELL_TOOL_STAT", statPath)]
+      (Process.setWorkingDir root (Process.proc automation ["policy"]))
+    Main.expectFailure process message
+    Text.writeFile (Main.joinPath root path) original
+
+expectForwarded = \process marker expected message -> do
+  (code, out, _err) <- Text.readProcess process
+  Main.assert (Eq.eq code Exit.ExitSuccess) message
+  Main.assert
+    (Eq.eq
+      (Text.strip out)
+      (Text.concat
+        [ marker,
+          "\n",
+          Text.decodeUtf8
+            (Json.encode
+              (Json.Array (Vector.fromList (List.map Json.String expected))))
+        ]))
+    message
+
+compileDispatchProbe = \product temporary marker -> do
+  let image = Main.joinPath temporary marker
+  let source = Main.addExtension image ".hell"
+  Text.writeFile source (Text.unlines
+    [ "main = do",
+      "  arguments <- Environment.getArgs",
+      Text.concat ["  Text.putStrLn \"", marker, "\""],
+      "  ByteString.hPutStr IO.stdout",
+      "    (Json.encode (Json.Array (Vector.fromList (List.map Json.String arguments))))",
+      "  Text.putStrLn \"\""
+    ])
+  Process.runProcess_
+    (Process.proc product ["--compile", source, "--output", image])
+  IO.pure image
+
+compileFailingRuntimePeer = \product temporary -> do
+  let source = Main.joinPath temporary "failing-runtime-peer.hell"
+  let image = Main.joinPath temporary "failing-runtime-peer"
+  Text.writeFile source (Text.unlines
+    [ "main :: IO () = do",
+      "  arguments <- Environment.getArgs",
+      "  logPath <- Environment.getEnv \"FAKE_RUNTIME_LOG\"",
+      "  Text.writeFile logPath (Text.unlines arguments)",
+      "  Exit.exitWith (Exit.ExitFailure 23)"
+    ])
+  Process.runProcess_
+    (Process.proc product ["--compile", source, "--output", image])
+  IO.pure image
+
 acceptance = \automation product sourceRoot -> do
   findTool <- Main.env "HELL_TOOL_FIND"
   statTool <- Main.env "HELL_TOOL_STAT"
-  chmodTool <- Main.env "HELL_TOOL_CHMOD"
+  mode <- Main.env "HELL_CHECK_MODE"
+  staticBinary <- Main.env "HELL_STATIC_BINARY"
   let findPath = Maybe.maybe "find" Function.id findTool
   let statPath = Maybe.maybe "stat" Function.id statTool
-  let chmodPath = Maybe.maybe "chmod" Function.id chmodTool
-  Temp.withSystemTempDirectory "hell-policy-negative" \temporary -> do
-    Directory.createDirectory (Text.concat [temporary, "/release"])
-    Text.writeFile (Text.concat [temporary, "/forbidden.sh"]) "#!/bin/sh\nexit 0\n"
-    Text.writeFile (Text.concat [temporary, "/flake.nix"]) "{}\n"
+  Main.assert
+    (Maybe.maybe Bool.True (\_path -> Bool.False) staticBinary)
+    "generic automation check captured the static release binary"
+  Temp.withSystemTempDirectory "hell-dispatch" \temporary -> do
+    checksProbe <- Main.compileDispatchProbe product temporary "checks"
+    releaseBuildProbe <- Main.compileDispatchProbe product temporary "release-build"
+    releaseControlProbe <- Main.compileDispatchProbe product temporary "release-control"
+    let overrides =
+          [ ("HELL_AUTOMATION_CHECKS", checksProbe),
+            ("HELL_AUTOMATION_RELEASE_BUILD", releaseBuildProbe),
+            ("HELL_AUTOMATION_RELEASE_CONTROL", releaseControlProbe)
+          ]
+    let hostile =
+          ["space value", "--leading", "*", "$(literal)", "semi;colon", "line\nbreak"]
+    Monad.forM_
+      [ ("policy", "checks"), ("metadata", "checks"),
+        ("hpack-drift", "checks"), ("check-sdist", "checks"),
+        ("generate-docs", "checks"), ("check-docs", "checks"),
+        ("nix-check", "checks"),
+        ("check-runtime", "release-build"), ("check-bundle", "release-build"),
+        ("nix-release", "release-build"),
+        ("aggregate", "release-control"), ("stage-draft", "release-control"),
+        ("verify-published", "release-control")
+      ]
+      \(command, marker) -> do
+        process <-
+          Main.withEnvironment
+            overrides
+            (Process.proc automation ([command] <> hostile))
+        Main.expectForwarded
+          process
+          marker
+          ([command] <> hostile)
+          (Text.concat ["dispatcher changed arguments for ", command])
+    unknown <- Main.withEnvironment overrides (Process.proc automation ["unknown"])
+    Main.expectFailure unknown "dispatcher accepted an unknown command"
+  releaseControl <- Main.env "HELL_AUTOMATION_RELEASE_CONTROL_IMAGE"
+  Maybe.maybe
+    (IO.pure ())
+    (\releaseControlPath ->
+      Temp.withSystemTempDirectory "hell-runtime-delegation" \temporary -> do
+        failingPeer <- Main.compileFailingRuntimePeer product temporary
+        let logPath = Main.joinPath temporary "runtime.log"
+        process <-
+          Main.withEnvironment
+            [ ("HELL_AUTOMATION_TEST_DELEGATION", "enabled"),
+              ("HELL_AUTOMATION_RELEASE_BUILD", failingPeer),
+              ("FAKE_RUNTIME_LOG", logPath)
+            ]
+            (Process.proc
+              releaseControlPath
+              ["test-runtime-delegation", "binary value", "aarch64"])
+        Main.expectFailure process "release-control accepted a failing runtime peer"
+        logged <- Text.readFile logPath
+        Main.assert
+          (Eq.eq (Text.lines logged) ["check-runtime", "binary value", "aarch64"])
+          "release-control changed runtime peer arguments")
+    releaseControl
+  if Eq.eq (Maybe.maybe "" Function.id mode) "hpack-drift"
+    then do
+      hpackTool <- Main.env "HELL_TOOL_HPACK"
+      copyTool <- Main.env "HELL_TOOL_CP"
+      let hpackPath = Maybe.maybe "missing-hpack-tool" Function.id hpackTool
+      let copyPath = Maybe.maybe "missing-copy-tool" Function.id copyTool
+      Main.assert
+        (Maybe.maybe Bool.False (\_path -> Bool.True) hpackTool)
+        "hpack-drift check did not declare HELL_TOOL_HPACK"
+      Main.assert
+        (Maybe.maybe Bool.False (\_path -> Bool.True) copyTool)
+        "hpack-drift check did not declare HELL_TOOL_CP"
+      Temp.withSystemTempDirectory "hell-empty-path" \temporary -> do
+        let bin = Main.joinPath temporary "bin"
+        Directory.createDirectory bin
+        process <- Main.withEnvironment
+          [ ("PATH", bin),
+            ("HELL_TOOL_HPACK", hpackPath),
+            ("HELL_TOOL_CP", copyPath)
+          ]
+          (Process.setWorkingDir sourceRoot (Process.proc automation ["hpack-drift"]))
+        (code, _out, _err) <- Text.readProcess process
+        Main.assert
+          (Eq.eq code Exit.ExitSuccess)
+          "hpack drift failed with explicit tools and an empty PATH"
+    else if Eq.eq (Maybe.maybe "" Function.id mode) "check-docs"
+      then do
+        cabalTool <- Main.env "HELL_TOOL_CABAL"
+        ghcTool <- Main.env "HELL_TOOL_GHC"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id cabalTool))
+          "documentation check did not declare an absolute HELL_TOOL_CABAL"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id ghcTool))
+          "documentation check did not declare an absolute HELL_TOOL_GHC"
+    else if Eq.eq (Maybe.maybe "" Function.id mode) "check-sdist"
+      then do
+        home <- Main.env "HOME"
+        cabalTool <- Main.env "HELL_TOOL_CABAL"
+        ghcTool <- Main.env "HELL_TOOL_GHC"
+        timeoutTool <- Main.env "HELL_TOOL_TIMEOUT"
+        tarTool <- Main.env "HELL_TOOL_TAR"
+        hpackTool <- Main.env "HELL_TOOL_HPACK"
+        copyTool <- Main.env "HELL_TOOL_CP"
+        Main.assert
+          (Eq.eq (Maybe.maybe "" Function.id home) "/homeless-shelter")
+          "source-distribution check must retain the hostile outer HOME"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id cabalTool))
+          "source-distribution check did not declare an absolute HELL_TOOL_CABAL"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id ghcTool))
+          "source-distribution check did not declare an absolute HELL_TOOL_GHC"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id timeoutTool))
+          "source-distribution check did not declare an absolute HELL_TOOL_TIMEOUT"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id tarTool))
+          "source-distribution check did not declare an absolute HELL_TOOL_TAR"
+        Main.assert
+          (Maybe.maybe Bool.True (\_path -> Bool.False) hpackTool)
+          "source-distribution check captured HELL_TOOL_HPACK"
+        Main.assert
+          (Maybe.maybe Bool.True (\_path -> Bool.False) copyTool)
+          "source-distribution check captured HELL_TOOL_CP"
+      else IO.pure ()
+  Temp.withSystemTempDirectory "hell-cache-policy-negative" \temporary -> do
+    let githubDirectory = Main.joinPath temporary ".github"
+    let workflowDirectory = Main.joinPath githubDirectory "workflows"
+    let releaseDirectory = Main.joinPath temporary "release"
+    let sourceGithubDirectory = Main.joinPath sourceRoot ".github"
+    let sourceWorkflowDirectory = Main.joinPath sourceGithubDirectory "workflows"
+    let sourceReleaseDirectory = Main.joinPath sourceRoot "release"
+    Directory.createDirectory githubDirectory
+    Directory.createDirectory workflowDirectory
+    Directory.createDirectory releaseDirectory
+    Monad.forM_
+      [ "main.yml", "release.yml", "verify-published.yml",
+        "cache-request.yml", "cache.yml"
+      ]
+      \name -> do
+        body <- Text.readFile (Main.joinPath sourceWorkflowDirectory name)
+        Text.writeFile (Main.joinPath workflowDirectory name) body
     Monad.forM_
       ["versions.schema.json", "release-manifest.schema.json", "spdx-2.3.schema.json"]
-      \name -> Text.writeFile (Text.concat [temporary, "/release/", name]) "{}\n"
-    process <- Main.withEnvironment
+      \name -> do
+        body <- Text.readFile (Main.joinPath sourceReleaseDirectory name)
+        Text.writeFile (Main.joinPath releaseDirectory name) body
+    flakeSource <- Text.readFile (Main.joinPath sourceRoot "flake.nix")
+    Text.writeFile (Main.joinPath temporary "flake.nix") flakeSource
+    securitySource <- Text.readFile (Main.joinPath sourceRoot "SECURITY.md")
+    Text.writeFile (Main.joinPath temporary "SECURITY.md") securitySource
+    cacheWorkflow <- Text.readFile (Main.joinPath workflowDirectory "cache.yml")
+    requestWorkflow <-
+      Text.readFile (Main.joinPath workflowDirectory "cache-request.yml")
+    mainWorkflow <- Text.readFile (Main.joinPath workflowDirectory "main.yml")
+    releaseWorkflow <- Text.readFile (Main.joinPath workflowDirectory "release.yml")
+    flake <- Text.readFile (Main.joinPath temporary "flake.nix")
+    positive <- Main.withEnvironment
       [("HELL_TOOL_FIND", findPath), ("HELL_TOOL_STAT", statPath)]
       (Process.setWorkingDir temporary (Process.proc automation ["policy"]))
-    Main.expectFailure process "policy accepted a repository-owned shell program"
-  ready <- Directory.doesFileExist
-    (Text.concat [sourceRoot, "/.github/actions/setup-hell/trust/READY"])
+    Process.runProcess_ positive
+    Main.expectPolicyMutationFailure
+      automation temporary "SECURITY.md" securitySource
+      (Maybe.maybe securitySource Function.id (Text.stripSuffix "\n" securitySource))
+      findPath statPath
+      "policy accepted a tracked text file without a final newline"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE="
+        "attacker-cache.cachix.org-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted an unreviewed cache public key"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "# cachix watch-store\n"])
+      findPath statPath
+      "policy accepted whole-store cache publication"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "./trusted#cache-client^bin --out-link trusted-cache-client"
+        "https://cachix.org/api/v1/install"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a mutable Cachix installer"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "./trusted#cache-client^bin --out-link trusted-cache-client"
+        "./trusted#cache-client --out-link trusted-cache-client"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a Cachix client out-link without its executable output"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "./trusted#cache-client^bin --out-link trusted-cache-client"
+        "./request#cache-client^bin --out-link trusted-cache-client"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a requesting-SHA Cachix client"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "./trusted#automation-checks --out-link trusted-cache-checker"
+        "./request#automation-checks --out-link trusted-cache-checker"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a requesting-SHA cache checker"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ../trusted-cache-checker policy"
+        "run: ./result-branch-checker policy"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted execution of a branch checker"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "ref: ${{ github.workflow_sha }}"
+        "ref: ${{ github.event.workflow_run.head_sha }}"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted requesting-SHA trusted tooling"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          github_access_token: disabled"
+        "          github_access_token: ${{ secrets.GITHUB_TOKEN }}"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a GitHub token before the requesting-SHA build"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "            access-tokens =\n"
+        "            access-tokens = github.com=${{ github.token }}\n"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a nonempty effective Nix access token"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ./trusted-cache-checker assert-cache-host trusted request"
+        "/usr/bin/true"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted loss of post-checkout credential assertions"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ./trusted-cache-checker assert-cache-host"
+        "run: /usr/bin/true"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted loss of pre-request credential assertions"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: |\n          /usr/bin/true\n"])
+      findPath statPath
+      "policy accepted a workflow command block"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - shell: bash\n        run: /usr/bin/true\n"])
+      findPath statPath
+      "policy accepted an explicit normal-workflow shell"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/true | /usr/bin/true\n"])
+      findPath statPath
+      "policy accepted a workflow pipeline"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/true;/usr/bin/true\n"])
+      findPath statPath
+      "policy accepted unspaced workflow sequencing"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/true&&/usr/bin/true\n"])
+      findPath statPath
+      "policy accepted unspaced workflow conjunction"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/true>/tmp/output\n"])
+      findPath statPath
+      "policy accepted unspaced workflow redirection"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/true&\n"])
+      findPath statPath
+      "policy accepted workflow backgrounding"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: (/usr/bin/true)\n"])
+      findPath statPath
+      "policy accepted a workflow subshell"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: sh -c /usr/bin/true\n"])
+      findPath statPath
+      "policy accepted sh interpreter invocation"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: bash -c /usr/bin/true\n"])
+      findPath statPath
+      "policy accepted Bash interpreter invocation"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: hell helper.hell\n"])
+      findPath statPath
+      "policy accepted explicit Hell interpreter invocation"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "      - run: /usr/bin/hell helper.hell\n"])
+      findPath statPath
+      "policy accepted path-qualified Hell interpreter invocation"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "always-allow-substitutes = false"
+        "always-allow-substitutes = true"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted the installer substitution override"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/main.yml" mainWorkflow
+      (Text.replace
+        "always-allow-substitutes = false"
+        "always-allow-substitutes = true"
+        mainWorkflow)
+      findPath statPath
+      "policy accepted global substitution of protected CI leaves"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ../trusted-cache-checker build-cache-root ../cache-output"
+        "env:\n          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}\n        run: ../trusted-cache-checker build-cache-root ../cache-output"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a credential in the requesting-SHA build phase"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "CACHE_TARGET: ${{ matrix.target }}"
+        "CACHE_TARGET: ${{ github.event.workflow_run.head_sha }}"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a requesting-event-controlled cache root"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "head_repository.full_name == github.repository"
+        "head_repository.full_name != github.repository"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a fork-repository cache writer"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "github.event.workflow_run.event == 'push'"
+        "github.event.workflow_run.event == 'pull_request'"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a pull-request cache writer"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "head_repository.full_name == github.repository"
+        "head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main'"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a main-only cache writer restriction"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "ref: ${{ github.event.workflow_run.head_sha }}"
+        "ref: ${{ github.event.workflow_run.head_branch }}"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted branch checkout instead of the immutable push SHA"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat [cacheWorkflow, "# nix build .#release-static-native\n"])
+      findPath statPath
+      "policy accepted a release-candidate target in the cache writer"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ./trusted-cache-client-bin/bin/cachix push hell-app-image-compilation cache-output"
+        "run: ./trusted-cache-client/bin/cachix push hell-app-image-compilation cache-output"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a Cachix executable path without its output link suffix"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: ./trusted-cache-client-bin/bin/cachix push hell-app-image-compilation cache-output"
+        "/usr/bin/true"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted loss of trusted explicit publication"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "check-cache-closure ../cache-output"
+        "metadata --check"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted an unchecked cache group closure"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "run: nix path-info --json --recursive --size --closure-size ./cache-output"
+        "run: nix path-info --json --recursive --size --closure-size cache-output"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a bare cache-output path as a flake reference"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "cancel-in-progress: false"
+        "cancel-in-progress: true"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted cancellation of an in-progress cache seed"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "      fail-fast: false\n      matrix:"
+        "      fail-fast: false\n      max-parallel: 1\n      matrix:"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a workflow-level cache matrix parallelism cap"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "id: build-cache-root"
+        "id: build-root"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a changed cache-root build step ID"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "id: validate-cache-closure"
+        "id: validate-root"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a changed cache-closure validation step ID"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          always() &&\n"
+        ""
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted publication without always()"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          steps.build-cache-root.outcome == 'success' &&\n"
+        ""
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted publication without a successful root build"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          steps.validate-cache-closure.outcome == 'success'\n"
+        "          steps.build-cache-root.outcome == 'success'\n"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted publication without successful closure validation"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          - automation\n"
+        "          - automation\n          - cache-seed\n"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted reintroduction of the redundant global cache root"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.concat
+        [ cacheWorkflow,
+          "\n      - name: Execute request after publication\n        working-directory: request\n        run: ../trusted-cache-checker policy\n"
+        ])
+      findPath statPath
+      "policy accepted requester-controlled execution after cache credentials"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache.yml" cacheWorkflow
+      (Text.replace
+        "          - cache-seed-static-toolchain\n"
+        "          - static-native\n"
+        cacheWorkflow)
+      findPath statPath
+      "policy accepted a forbidden product root in the trusted matrix"
+    Monad.forM_
+      [ "cache-seed-static-c-runtime",
+        "cache-seed-static-compiler",
+        "cache-seed-automation"
+      ]
+      \prospective -> Main.expectPolicyMutationFailure
+        automation temporary ".github/workflows/cache.yml" cacheWorkflow
+        (Text.replace
+          "          - cache-seed-static-toolchain\n"
+          (Text.concat ["          - ", prospective, "\n"])
+          cacheWorkflow)
+        findPath statPath
+        (Text.concat
+          [ "policy prematurely authorized prospective cache root: ",
+            prospective
+          ])
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/cache-request.yml" requestWorkflow
+      (Text.concat [requestWorkflow, "# CACHIX_AUTH_TOKEN\n"])
+      findPath statPath
+      "policy accepted a cache credential in branch-controlled request YAML"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/main.yml" mainWorkflow
+      (Text.replace "--rebuild --no-link" "--check" mainWorkflow)
+      findPath statPath
+      "policy accepted the unsupported deterministic rebuild command"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/release.yml" releaseWorkflow
+      (Text.concat [releaseWorkflow, "# CACHIX_AUTH_TOKEN\n"])
+      findPath statPath
+      "policy accepted a cache credential in the release workflow"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace "allowSubstitutes = false;" "allowSubstitutes = true;" flake)
+      findPath statPath
+      "policy accepted substitutable product and gate leaves"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "cache-client = pkgs.cachix;"
+        "cache-client = pkgs.cachix;\n          cache-seed = automationCacheSeed;"
+        flake)
+      findPath statPath
+      "policy accepted reintroduction of the global cache package"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "path = staticNativePackages.haskellPackages.ghc;"
+        "path = staticNativePackages.stdenv.cc;"
+        flake)
+      findPath statPath
+      "policy accepted a prospective compiler root without exact GHC membership"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "name = \"toolchain-zlib\";"
+        "name = \"toolchain-extra\";"
+        flake)
+      findPath statPath
+      "policy accepted changed prospective C/runtime membership"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "path = hellAutomationTests;"
+        "path = hellAutomation;"
+        flake)
+      findPath statPath
+      "policy accepted aliased prospective automation members"
+  let sourceActionTrust =
+        Main.joinPath
+          (Main.joinPath (Main.joinPath (Main.joinPath sourceRoot ".github") "actions") "setup-hell")
+          "trust"
+  ready <- Directory.doesFileExist (Main.joinPath sourceActionTrust "READY")
   Main.assert (Bool.not ready) "pre-publication setup unexpectedly has READY trust activation"
   Temp.withSystemTempDirectory "hell-fake-gh" \temporary -> do
-    let bin = Text.concat [temporary, "/bin"]
-    let local = Text.concat [temporary, "/local"]
-    let remote = Text.concat [temporary, "/remote"]
-    Directory.createDirectory bin
+    let local = Main.joinPath temporary "local"
+    let remote = Main.joinPath temporary "remote"
+    let emptyPath = Main.joinPath temporary "empty-path"
     Directory.createDirectory local
     Directory.createDirectory remote
-    let fake = Text.concat [bin, "/gh"]
-    Directory.copyFile (Text.concat [sourceRoot, "/test/automation/fake-gh.hell"]) fake
-    Process.runProcess_ (Process.proc chmodPath ["0755", "--", fake])
+    Directory.createDirectory emptyPath
+    let fake = Main.joinPath temporary "fake-gh"
+    let fakeSource =
+          Main.joinPath
+            (Main.joinPath (Main.joinPath sourceRoot "test") "automation")
+            "fake-gh.hell"
+    Process.runProcess_
+      (Process.proc product ["--compile", fakeSource, "--output", fake])
+    fakeMode <- Text.readProcessStdout_
+      (Process.proc statPath ["--format=%a", "--", fake])
+    Main.assert
+      (Eq.eq (Text.strip fakeMode) "755")
+      "compiled fake gh mode must be exactly 0755"
     let names =
           [ "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz",
             "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json",
@@ -73,18 +715,17 @@ acceptance = \automation product sourceRoot -> do
             "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",
             "release.json", "SHA256SUMS"
           ]
-    Monad.forM_ names \name -> Text.writeFile (Text.concat [local, "/", name]) (Text.concat [name, "\n"])
+    Monad.forM_ names \name -> Text.writeFile (Main.joinPath local name) (Text.concat [name, "\n"])
     Directory.copyFile
-      (Text.concat [local, "/release.json"])
-      (Text.concat [remote, "/release.json"])
-    let notes = Text.concat [temporary, "/notes.md"]
+      (Main.joinPath local "release.json")
+      (Main.joinPath remote "release.json")
+    let notes = Main.joinPath temporary "notes.md"
     Text.writeFile notes "notes\n"
-    let logPath = Text.concat [temporary, "/gh.log"]
+    let logPath = Main.joinPath temporary "gh.log"
     Text.writeFile logPath ""
-    inherited <- Environment.getEnvironment
-    let oldPath = Maybe.maybe "" Function.id (List.lookup "PATH" inherited)
     let common =
-          [ ("PATH", Text.concat [bin, ":", oldPath]),
+          [ ("PATH", emptyPath),
+            ("HELL_TOOL_GH", fake),
             ("FAKE_GH_MODE", "partial"),
             ("FAKE_GH_LOG", logPath),
             ("FAKE_GH_REMOTE", remote),
@@ -103,20 +744,20 @@ acceptance = \automation product sourceRoot -> do
     Main.assert (Eq.eq (List.sort finalNames) (List.sort names))
       "partial draft did not finish with the exact six remote assets"
     Monad.forM_ names \name -> do
-      localBytes <- ByteString.readFile (Text.concat [local, "/", name])
-      remoteBytes <- ByteString.readFile (Text.concat [remote, "/", name])
+      localBytes <- ByteString.readFile (Main.joinPath local name)
+      remoteBytes <- ByteString.readFile (Main.joinPath remote name)
       Main.assert (Eq.eq localBytes remoteBytes)
         "partial draft final remote bytes differ"
-    Text.writeFile (Text.concat [remote, "/release.json"]) "mismatch\n"
+    Text.writeFile (Main.joinPath remote "release.json") "mismatch\n"
     mismatch <- Main.withEnvironment common
       (Process.proc automation ["stage-draft", local])
     Main.expectFailure mismatch "draft accepted mismatched existing bytes"
-    Directory.removeFile (Text.concat [remote, "/release.json"])
+    Directory.removeFile (Main.joinPath remote "release.json")
     Text.writeFile logPath ""
     published <- Main.withEnvironment
       ([("FAKE_GH_MODE", "published")] <>
        List.filter (\(name, _value) -> Bool.not (Eq.eq name "FAKE_GH_MODE")) common)
-      (Process.proc automation ["verify-published", Text.concat [temporary, "/published"]])
+      (Process.proc automation ["verify-published", Main.joinPath temporary "published"])
     Main.expectFailure published "incomplete published fixture unexpectedly verified"
     publishedLog <- Text.readFile logPath
     Monad.forM_ ["release\tupload", "release\tedit", "release\tdelete"] \mutation ->
@@ -125,12 +766,16 @@ acceptance = \automation product sourceRoot -> do
 
 main = do
   arguments <- Environment.getArgs
+  let lowercaseCommit = "0123456789abcdef0123456789abcdef01234567"
+  let commitWidth = Text.length lowercaseCommit
   Main.assert
     (Eq.eq arguments ["space value", "--leading", "*", "$(literal)", "semi;colon"])
     "application image did not preserve hostile argv"
-  Main.assert (Main.lowerHex 40 "0123456789abcdef0123456789abcdef01234567")
+  Main.assert (Main.lowerHex commitWidth lowercaseCommit)
     "lowercase commit validation rejected a full object id"
-  Main.assert (Bool.not (Main.lowerHex 40 "0123456789ABCDEF0123456789abcdef01234567"))
+  Main.assert
+    (Bool.not
+      (Main.lowerHex commitWidth "0123456789ABCDEF0123456789abcdef01234567"))
     "lowercase commit validation accepted uppercase hex"
   Main.assert
     (Main.safeArchiveMember "release-root/" "release-root/README.md")
@@ -145,6 +790,18 @@ main = do
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
     "cache poisoning digest mismatch was accepted"
+  Main.assert
+    (Main.staticBinaryPlacementValid
+      "mkAutomationCheck = {}\nreleaseStaticNative = {\n  HELL_STATIC_BINARY = \"static\";\n};\n")
+    "release-only static binary placement was rejected"
+  Main.assert
+    (Bool.not (Main.staticBinaryPlacementValid
+      "mkAutomationCheck = {\n  HELL_STATIC_BINARY = \"static\";\n};\nreleaseStaticNative = {\n  HELL_STATIC_BINARY = \"static\";\n};\n"))
+    "generic and release static binary placements were accepted"
+  Main.assert
+    (Bool.not (Main.staticBinaryPlacementValid
+      "mkAutomationCheck = {\n  HELL_STATIC_BINARY = \"static\";\n};\nreleaseStaticNative = {}\n"))
+    "generic-only static binary placement was accepted"
   Main.assert
     (Eq.eq
       (List.sort

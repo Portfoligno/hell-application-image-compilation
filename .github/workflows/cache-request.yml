@@ -1,0 +1,20 @@
+name: Cache request
+
+on:
+  push:
+
+concurrency:
+  group: cache-request-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    name: request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Request cache population for this immutable push
+        run: /usr/bin/true

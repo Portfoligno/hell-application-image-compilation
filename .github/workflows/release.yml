@@ -27,26 +27,40 @@ jobs:
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build the native Hell automation image
-        run: nix build --no-update-lock-file .#automation --out-link result-automation
+          extra_nix_config: |
+            extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30
+            extra-trusted-public-keys = hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE=
+            require-sigs = true
+            always-allow-substitutes = false
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 30
+            filetransfer-retry-attempts = 2
+      - name: Build the native Hell checks automation image
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#automation-checks --out-link result-automation-checks
+      - name: Rebuild checks automation image deterministically
+        run: nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#automation-checks
       - name: Enforce repository automation policy
-        run: ./result-automation policy
+        run: ./result-automation-checks policy
       - name: Validate fixed release metadata and tag identity
-        run: ./result-automation metadata --check
+        run: ./result-automation-checks metadata --check
+      - name: Show exact hpack dependency plan
+        run: nix build --dry-run --no-update-lock-file .#checks.x86_64-linux.hpack-drift
       - name: Check exact hpack output
-        run: ./result-automation hpack-drift
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.hpack-drift
       - name: Check source distribution
-        run: ./result-automation check-sdist
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution
       - name: Check tagged documentation
-        run: ./result-automation check-docs
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.documentation
       - name: Run native flake checks
-        run: nix flake check --no-update-lock-file --print-build-logs
+        run: nix flake check --max-jobs 1 --no-update-lock-file --print-build-logs
 
   build-static:
     name: native release (${{ matrix.arch }})
     needs: metadata
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - arch: x86_64
@@ -54,7 +68,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -66,22 +80,35 @@ jobs:
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build native automation image
-        run: nix build --no-update-lock-file .#automation --out-link result-automation
+          extra_nix_config: |
+            extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30
+            extra-trusted-public-keys = hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE=
+            require-sigs = true
+            always-allow-substitutes = false
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 30
+            filetransfer-retry-attempts = 2
+      - name: Build native release automation image
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#automation-release-build --out-link result-automation-release-build
+      - name: Rebuild release automation image deterministically
+        run: nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-build
+      - name: Show native cache and build plan
+        run: nix build --dry-run --no-update-lock-file .#release-static-native
       - name: Build native static binary
-        run: nix build --no-update-lock-file .#static-native --out-link result-static
+        run: nix build --max-jobs 1 --no-update-lock-file .#static-native --out-link result-static
       - name: Check native static runtime
         env:
           HELL_TARGET_ARCH: ${{ matrix.arch }}
-        run: ./result-automation check-runtime ./result-static/bin/hell "$HELL_TARGET_ARCH"
+        run: ./result-automation-release-build check-runtime ./result-static/bin/hell
       - name: Build deterministic architecture bundle
-        run: nix build --no-update-lock-file .#release-static-native --out-link result-release
+        run: nix build --max-jobs 1 --no-update-lock-file .#release-static-native --out-link result-release
       - name: Rebuild architecture bundle
-        run: nix build --check --no-update-lock-file .#release-static-native
+        run: nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#release-static-native
       - name: Check exact architecture bundle
         env:
           HELL_TARGET_ARCH: ${{ matrix.arch }}
-        run: ./result-automation check-bundle ./result-release "$HELL_TARGET_ARCH"
+        run: ./result-automation-release-build check-bundle ./result-release
       - name: Upload commit-scoped native bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -110,8 +137,19 @@ jobs:
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build native automation image
-        run: nix build --no-update-lock-file .#automation --out-link result-automation
+          extra_nix_config: |
+            extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30
+            extra-trusted-public-keys = hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE=
+            require-sigs = true
+            always-allow-substitutes = false
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 30
+            filetransfer-retry-attempts = 2
+      - name: Build native release-control automation image
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#automation-release-control --out-link result-automation-release-control
+      - name: Rebuild release-control image deterministically
+        run: nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-control
       - name: Download only this commit's native bundles
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -121,7 +159,7 @@ jobs:
       - name: Aggregate exact six-asset release
         env:
           HELL_COMMIT_SHA: ${{ github.sha }}
-        run: ./result-automation aggregate incoming dist "$HELL_COMMIT_SHA"
+        run: ./result-automation-release-control aggregate incoming dist
       - name: Attest archives and checksum manifest
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
@@ -166,8 +204,19 @@ jobs:
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build native automation image
-        run: nix build --no-update-lock-file .#automation --out-link result-automation
+          extra_nix_config: |
+            extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30
+            extra-trusted-public-keys = hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE=
+            require-sigs = true
+            always-allow-substitutes = false
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 30
+            filetransfer-retry-attempts = 2
+      - name: Build native release-control automation image
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#automation-release-control --out-link result-automation-release-control
+      - name: Rebuild release-control image deterministically
+        run: nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-control
       - name: Download staged assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -176,4 +225,4 @@ jobs:
       - name: Create or verify immutable-release-ready draft
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./result-automation stage-draft dist
+        run: ./result-automation-release-control stage-draft dist

@@ -1,26 +1,4 @@
 #!/usr/bin/env hell
-data Opts = Opts {
-  runnerArch :: Text,
-  binary :: Text,
-  archive :: Text,
-  trust :: Text,
-  archiveChecksum :: Text,
-  binaryChecksum :: Text,
-  cacheHit :: Text,
-  state :: Text
-  }
-
-options =
-  (\runnerArch binary archive trust archiveChecksum binaryChecksum cacheHit state ->
-    Main.Opts { runnerArch, binary, archive, trust, archiveChecksum, binaryChecksum, cacheHit, state })
-  <$> Options.strOption (Option.long "runner-arch")
-  <*> Options.strOption (Option.long "binary")
-  <*> Options.strOption (Option.long "archive")
-  <*> Options.strOption (Option.long "trust")
-  <*> Options.strOption (Option.long "archive-checksum")
-  <*> Options.strOption (Option.long "binary-checksum")
-  <*> Options.strOption (Option.long "cache-hit")
-  <*> Options.strOption (Option.long "state")
 
 die = \message -> Exit.die $ Text.concat ["setup-hell validation failed: ", message]
 
@@ -62,14 +40,25 @@ run = \command arguments -> do
   Main.require (Eq.eq err "") $ Text.concat ["command wrote stderr: ", command]
   Applicative.pure out
 
-lowerHex = \text ->
-  Main.and (Eq.eq (Text.length text) 64)
+environment = \name -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe
+    (Main.die $ Text.concat ["missing environment variable: ", name])
+    Applicative.pure
+    (List.lookup name values)
+
+lowerHex = \width text ->
+  Main.and (Eq.eq (Text.length text) width)
     (Text.all (\character -> List.elem character ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']) text)
 
-checksumFromOutput = \output ->
-  if Main.lowerHex (Text.take 64 output)
-       then Applicative.pure $ Text.take 64 output
-       else Main.die "sha256sum returned no digest"
+checksumFromOutput = \width output ->
+  Maybe.maybe
+    (Main.die "sha256sum returned no digest")
+    (\digest ->
+      if Main.lowerHex width digest
+        then Applicative.pure digest
+        else Main.die "sha256sum returned an invalid digest")
+    (Maybe.listToMaybe $ Text.words output)
 
 noControl = \text ->
   Main.and (Bool.not $ Text.isInfixOf "\n" text) (Bool.not $ Text.isInfixOf "\r" text)
@@ -94,15 +83,17 @@ memberNames = \value ->
 normalizedCacheHit = \value -> if Eq.eq value "true" then "true" else "false"
 
 main = do
-  opts <- Options.execParser $ Options.info (Main.options <**> Options.helper) Options.fullDesc
-  let runnerArch = Record.get @"runnerArch" opts
-  let binary = Record.get @"binary" opts
-  let archive = Record.get @"archive" opts
-  let trustPath = Record.get @"trust" opts
-  let archiveChecksum = Record.get @"archiveChecksum" opts
-  let binaryChecksum = Record.get @"binaryChecksum" opts
-  let cacheHit = Record.get @"cacheHit" opts
-  let statePath = Record.get @"state" opts
+  runnerArch <- Main.environment "HELL_SETUP_RUNNER_ARCH"
+  binary <- Main.environment "HELL_SETUP_BINARY"
+  archive <- Main.environment "HELL_SETUP_ARCHIVE"
+  trustPath <- Main.environment "HELL_SETUP_TRUST"
+  archiveChecksum <- Main.environment "HELL_SETUP_ARCHIVE_CHECKSUM"
+  binaryChecksum <- Main.environment "HELL_SETUP_BINARY_CHECKSUM"
+  cacheHit <- Main.environment "HELL_SETUP_CACHE_HIT"
+  statePath <- Main.environment "HELL_SETUP_STATE"
+  let digestWidth =
+        Text.length "0000000000000000000000000000000000000000000000000000000000000000"
+  let commitWidth = Text.length "0000000000000000000000000000000000000000"
   Main.require (List.elem runnerArch ["X64", "ARM64"]) "unsupported runner architecture"
   Main.require (List.elem cacheHit ["true", "false", ""]) "invalid cache-hit value"
   Monad.mapM_ (\value -> Main.require (Main.noControl value) "control character in argument")
@@ -129,7 +120,7 @@ main = do
   Main.require (Eq.eq repository "Portfoligno/hell-application-image-compilation") "wrong repository"
   Main.require (Eq.eq tag "application-image-compilation/v1.0.0") "wrong tag"
   Main.require (Eq.eq trustArch runnerArch) "runner/trust architecture mismatch"
-  Main.require (Main.lowerHex commit) "invalid tagged commit"
+  Main.require (Main.lowerHex commitWidth commit) "invalid tagged commit"
   Main.require (Eq.eq expectedVersion "Hell 2026-05-29 — Application Image Compilation 1.0.0") "wrong public identity"
   targetValue <- Main.field "target" trustFields
   targetFields <- Main.object targetValue
@@ -163,7 +154,7 @@ main = do
   fingerprint <- Main.stringField "compatibilityFingerprint" imageFields
   Main.require (Eq.eq formatVersion 2.0) "wrong application-image format"
   Main.require (Eq.eq abiVersion 2.0) "wrong application-image ABI"
-  Main.require (Eq.eq fingerprint "c5fd3286e5ebd3c8") "wrong compatibility fingerprint"
+  Main.require (Eq.eq fingerprint "c0b499f996de5437") "wrong compatibility fingerprint"
   buildTargetValue <- Main.field "target" buildInfoFields
   buildTargetFields <- Main.object buildTargetValue
   buildTargetOs <- Main.stringField "os" buildTargetFields
@@ -185,17 +176,17 @@ main = do
   expectedMembersValue <- Main.field "members" archiveFields
   expectedMembers <- Main.memberNames expectedMembersValue
   expectedMember <- Main.stringField "member" binaryFields
-  Main.require (Main.lowerHex expectedArchiveDigest) "invalid archive digest"
-  Main.require (Main.lowerHex expectedBinaryDigest) "invalid binary digest"
+  Main.require (Main.lowerHex digestWidth expectedArchiveDigest) "invalid archive digest"
+  Main.require (Main.lowerHex digestWidth expectedBinaryDigest) "invalid binary digest"
   Main.require (Text.isSuffixOf expectedArchiveName archive) "archive path/name mismatch"
   Main.require (Text.isSuffixOf "/hell" expectedMember) "unexpected binary member"
 
   Process.runProcess_ $ Process.proc "/usr/bin/sha256sum" ["--check", "--strict", archiveChecksum]
   archiveOutput <- Main.run "/usr/bin/sha256sum" [archive]
-  actualArchiveDigest <- Main.checksumFromOutput archiveOutput
+  actualArchiveDigest <- Main.checksumFromOutput digestWidth archiveOutput
   Main.require (Eq.eq actualArchiveDigest expectedArchiveDigest) "archive digest differs from trust JSON"
   binaryOutput <- Main.run "/usr/bin/sha256sum" [binary]
-  actualBinaryDigest <- Main.checksumFromOutput binaryOutput
+  actualBinaryDigest <- Main.checksumFromOutput digestWidth binaryOutput
   Main.require (Eq.eq actualBinaryDigest expectedBinaryDigest) "installed binary digest differs from trust JSON"
   checksumText <- Text.readFile binaryChecksum
   Main.require (Text.isPrefixOf expectedBinaryDigest checksumText) "member checksum file differs from trust JSON"

@@ -37,8 +37,9 @@ all of these gates pass on the exact commit to be tagged:
 6. Confirm the normal test suite, dynamic application image check, and
    native-static application image check all ran.
 7. Verify each published architecture on an actual compatible Linux target.
-8. Verify the Pages deployment on the tag target, including API, examples,
-   releases, provenance, support, security, and license links.
+8. Validate the exact documentation at the annotated tag locally, including
+   API, examples, releases, provenance, support, security, and license links.
+   Pages deployment is not part of this release acceptance path.
 9. Run `cabal check`, create a source distribution, inspect its contents, and
    build/test from the unpacked source distribution.
 10. Confirm no `.serena`, `.agents`, `.codex`, credentials, editor state, or

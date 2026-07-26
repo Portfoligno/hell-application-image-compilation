@@ -1,6 +1,8 @@
 main = do
+  let prefix = "Hel"
+  let prefixWidth = Text.length prefix
   Text.putStrLn (Text.concat ["Hello, ", "World!"])
-  Text.putStrLn (Text.take 3 "Hello, World!")
-  Text.putStrLn (Text.drop 3 "Hello, World!")
+  Text.putStrLn (Text.take prefixWidth "Hello, World!")
+  Text.putStrLn (Text.drop prefixWidth "Hello, World!")
   Text.putStrLn (Text.strip "  Hello, World!   ")
   Text.putStrLn (Text.intercalate ", " ["Hello","World!"])

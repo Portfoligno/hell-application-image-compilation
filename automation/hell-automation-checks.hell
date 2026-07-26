@@ -1,0 +1,1083 @@
+#!/usr/bin/env hell
+
+-- Repository, documentation, and source-distribution checks.
+
+joinPath = \parent child ->
+  Maybe.maybe
+    (Text.concat [parent, "/", child])
+    (\without -> Text.concat [without, "/", child])
+    (Text.stripSuffix "/" parent)
+
+die = \message -> Exit.die (Text.concat ["hell automation: ", message])
+
+runConfigured = \label process -> do
+  (code, _out, err) <- Text.readProcess process
+  if Eq.eq code Exit.ExitSuccess
+    then IO.pure ()
+    else Main.die (Text.concat ["child failed: ", label, "\n", err])
+
+run = \executable arguments ->
+  Main.runConfigured executable (Process.proc executable arguments)
+
+withEnvironment = \overrides process -> do
+  inherited <- Environment.getEnvironment
+  let names = List.map (\(name, _value) -> name) overrides
+  IO.pure
+    (Process.setEnv
+      (overrides <>
+       List.filter (\(name, _value) -> Bool.not (List.elem name names)) inherited)
+      process)
+
+isolatedCabalEnvironment = \temporary -> do
+  let home = Main.joinPath temporary "home"
+  let cabalConfig = Main.joinPath home "config"
+  Directory.createDirectory home
+  Text.writeFile cabalConfig "active-repositories: :none\n"
+  IO.pure [("HOME", home), ("CABAL_CONFIG", cabalConfig)]
+
+runConfiguredInEnvironment = \label directory overrides executable arguments -> do
+  process <-
+    Main.withEnvironment
+      overrides
+      (Process.setWorkingDir directory (Process.proc executable arguments))
+  Main.runConfigured label process
+
+runIn = \directory executable arguments ->
+  Process.runProcess_
+    (Process.setWorkingDir directory (Process.proc executable arguments))
+
+capture = \executable arguments -> do
+  (code, out, err) <- Text.readProcess (Process.proc executable arguments)
+  if Eq.eq code Exit.ExitSuccess
+    then IO.pure out
+    else Main.die (Text.concat ["child failed: ", executable, "\n", err])
+
+require = \condition message ->
+  if condition then IO.pure () else Main.die message
+
+requireText = \needle haystack message ->
+  Main.require (Text.isInfixOf needle haystack) message
+
+env = \name -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe
+    (Main.die (Text.concat ["missing environment value: ", name]))
+    IO.pure
+    (List.lookup name values)
+
+envDefault = \name fallback -> do
+  values <- Environment.getEnvironment
+  IO.pure (Maybe.maybe fallback Function.id (List.lookup name values))
+
+envAlias = \preferred legacy -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe
+    (Maybe.maybe
+      (Main.die (Text.concat ["missing environment value: ", preferred]))
+      IO.pure
+      (List.lookup legacy values))
+    IO.pure
+    (List.lookup preferred values)
+
+jsonFile = \path -> do
+  bytes <- ByteString.readFile path
+  Maybe.maybe (Main.die (Text.concat ["invalid JSON: ", path])) IO.pure (Json.decode bytes)
+
+jsonObjectField = \name value ->
+  Json.value
+    (Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\object ->
+      Maybe.maybe
+        (Error.error (Text.concat ["missing JSON field: ", name]))
+        Function.id
+        (Map.lookup name object))
+    value
+
+jsonString = \value ->
+  Json.value
+    (Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    Function.id
+    (\_ -> Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    value
+
+only = \values ->
+  Maybe.maybe (Error.error "expected one value") Function.id (Maybe.listToMaybe values)
+
+argument = \position values ->
+  Maybe.maybe
+    (Error.error "missing command argument")
+    Function.id
+    (Maybe.listToMaybe (List.drop position values))
+
+staticBinaryPlacementValid = \source ->
+  List.and
+    [ Eq.eq (List.length (Text.splitOn "HELL_STATIC_BINARY =" source)) 2,
+      Eq.eq (List.length (Text.splitOn "releaseStaticNative =" source)) 2,
+      Text.isInfixOf
+        "HELL_STATIC_BINARY ="
+        (Maybe.maybe
+          ""
+          Function.id
+          (Maybe.listToMaybe
+            (List.drop 1 (Text.splitOn "releaseStaticNative =" source))))
+    ]
+
+fixedTag = "application-image-compilation/v1.0.0"
+fixedRepository = "Portfoligno/hell-application-image-compilation"
+cacheName = "hell-app-image-compilation"
+cachePublicKey =
+  "hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE="
+cacheSubstituter =
+  "extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30"
+cacheTrustedKeyLine =
+  Text.concat ["extra-trusted-public-keys = ", Main.cachePublicKey]
+cacheClosureLimit = 53687091200
+deterministicReleaseRebuild =
+  "nix build --max-jobs 1 --rebuild --no-link --no-update-lock-file --print-build-logs .#release-static-native"
+fullCommitWidth = Text.length "0000000000000000000000000000000000000000"
+x86Archive = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz"
+x86Spdx = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json"
+armArchive = "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz"
+armSpdx = "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json"
+
+sameCount = \left right source ->
+  Eq.eq
+    (List.length (Text.splitOn left source))
+    (List.length (Text.splitOn right source))
+
+forbiddenGitKey = \name ->
+  List.or
+    [ List.and
+        [ Text.isPrefixOf "http." (Text.toLower name),
+          Text.isSuffixOf ".extraheader" (Text.toLower name)
+        ],
+      Eq.eq (Text.toLower name) "credential.helper",
+      List.and
+        [ Text.isPrefixOf "credential." (Text.toLower name),
+          Text.isSuffixOf ".helper" (Text.toLower name)
+        ]
+    ]
+
+assertGitCredentialScope = \gitTool arguments label -> do
+  names <- Main.capture gitTool arguments
+  let forbidden =
+        List.filter
+          Main.forbiddenGitKey
+          (List.filter (Bool.not . Text.eq "") (Text.splitOn "\0" names))
+  Main.require
+    (Eq.eq forbidden [])
+    (Text.concat ["cache host has a forbidden Git credential in ", label])
+
+rawAccessTokenLineSafe = \line ->
+  if Text.isPrefixOf "access-tokens" (Text.strip line)
+    then List.elem
+      (Text.words line)
+      [ ["access-tokens", "="],
+        ["access-tokens", "=", "github.com=disabled"]
+      ]
+    else Bool.True
+
+shellProgramPath = \path ->
+  List.or [Text.isSuffixOf ".sh" path, Text.isSuffixOf ".bash" path]
+
+assertCacheHost = \repositories -> do
+  Monad.forM_
+    [ "GITHUB_TOKEN", "GH_TOKEN", "INPUT_GITHUB_ACCESS_TOKEN",
+      "GITHUB_ACCESS_TOKEN", "CACHIX_AUTH_TOKEN", "CACHIX_SIGNING_KEY"
+    ]
+    \name -> do
+      value <- Main.envDefault name ""
+      Main.require
+        (Eq.eq value "")
+        (Text.concat ["cache host exposes forbidden credential: ", name])
+  home <- Directory.getHomeDirectory
+  netrc <- Directory.doesFileExist (Main.joinPath home ".netrc")
+  Main.require (Bool.not netrc) "cache host exposes a .netrc credential"
+  nixTool <- Main.envDefault "HELL_TOOL_NIX" "nix"
+  accessTokens <- Main.capture nixTool ["config", "show", "access-tokens"]
+  Main.require (Eq.eq (Text.strip accessTokens) "")
+    "effective Nix access-tokens is not empty"
+  allowSubstitutes <- Main.capture nixTool
+    ["config", "show", "always-allow-substitutes"]
+  Main.require (Eq.eq (Text.strip allowSubstitutes) "false")
+    "Nix permits always-allow-substitutes"
+  nixConfig <- Text.readFile "/etc/nix/nix.conf"
+  Main.require
+    (List.and (List.map Main.rawAccessTokenLineSafe (Text.lines nixConfig)))
+    "raw Nix configuration contains an unreviewed access token"
+  gitTool <- Main.envDefault "HELL_TOOL_GIT" "git"
+  Main.assertGitCredentialScope
+    gitTool
+    ["config", "--null", "--name-only", "--list"]
+    "effective system and global configuration"
+  Monad.forM_ repositories \repository ->
+    Main.assertGitCredentialScope
+      gitTool
+      ["-C", repository, "config", "--local", "--null", "--name-only", "--list"]
+      repository
+  Text.putStrLn "cache host credential contract passed"
+
+activeCachePolicyValid =
+  \flake mainWorkflow releaseWorkflow verifyWorkflow requestWorkflow cacheWorkflow ->
+  List.and
+    [ Main.sameCount "github_access_token:" "fallback = true" mainWorkflow,
+      Main.sameCount "github_access_token:" "fallback = true" releaseWorkflow,
+      Main.sameCount "github_access_token:" "fallback = true" verifyWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheSubstituter mainWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheSubstituter releaseWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheSubstituter verifyWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheTrustedKeyLine mainWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheTrustedKeyLine releaseWorkflow,
+      Main.sameCount "github_access_token:" Main.cacheTrustedKeyLine verifyWorkflow,
+      Main.sameCount "github_access_token:" "require-sigs = true" mainWorkflow,
+      Main.sameCount "github_access_token:" "require-sigs = true" releaseWorkflow,
+      Main.sameCount "github_access_token:" "require-sigs = true" verifyWorkflow,
+      Main.sameCount "github_access_token:" "always-allow-substitutes = false" mainWorkflow,
+      Main.sameCount "github_access_token:" "always-allow-substitutes = false" releaseWorkflow,
+      Main.sameCount "github_access_token:" "always-allow-substitutes = false" verifyWorkflow,
+      Eq.eq (List.length (Text.splitOn "github_access_token: disabled" cacheWorkflow)) 2,
+      Bool.not (Text.isInfixOf "secrets.GITHUB_TOKEN" cacheWorkflow),
+      Bool.not (Text.isInfixOf "always-allow-substitutes = true"
+        (Text.concat [mainWorkflow, releaseWorkflow, verifyWorkflow, cacheWorkflow])),
+      Eq.eq (List.length (Text.splitOn Main.cacheSubstituter cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn Main.cacheTrustedKeyLine cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "require-sigs = true" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "always-allow-substitutes = false" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "fallback = true" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "connect-timeout = 5" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "stalled-download-timeout = 30" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "filetransfer-retry-attempts = 2" cacheWorkflow)) 2,
+      Text.isInfixOf "connect-timeout = 5" mainWorkflow,
+      Text.isInfixOf "stalled-download-timeout = 30" releaseWorkflow,
+      Text.isInfixOf "filetransfer-retry-attempts = 2" verifyWorkflow,
+      Bool.not (Text.isInfixOf "require-sigs = false" (Text.concat
+        [mainWorkflow, releaseWorkflow, verifyWorkflow, cacheWorkflow])),
+      Bool.not (Text.isInfixOf "trusted = true" (Text.concat
+        [mainWorkflow, releaseWorkflow, verifyWorkflow, cacheWorkflow])),
+      Bool.not (Text.isInfixOf "cachix/cachix-action@" mainWorkflow),
+      Bool.not (Text.isInfixOf "cachix/cachix-action@" releaseWorkflow),
+      Bool.not (Text.isInfixOf "cachix/cachix-action@" verifyWorkflow),
+      Bool.not (Text.isInfixOf "CACHIX_AUTH_TOKEN" (Text.concat
+        [mainWorkflow, releaseWorkflow, verifyWorkflow, requestWorkflow])),
+      Bool.not (Text.isInfixOf "CACHIX_SIGNING_KEY" (Text.concat
+        [mainWorkflow, releaseWorkflow, verifyWorkflow, requestWorkflow])),
+      Text.isInfixOf "name: Cache request" requestWorkflow,
+      Text.isInfixOf "on:\n  push:" requestWorkflow,
+      Bool.not (Text.isInfixOf "branches:" requestWorkflow),
+      Bool.not (Text.isInfixOf "pull_request" requestWorkflow),
+      Bool.not (Text.isInfixOf "CACHIX_AUTH_TOKEN" requestWorkflow),
+      Bool.not (Text.isInfixOf "CACHIX_SIGNING_KEY" requestWorkflow),
+      Text.isInfixOf "permissions:\n  contents: read" requestWorkflow,
+      Text.isInfixOf "run: /usr/bin/true" requestWorkflow,
+      Text.isInfixOf Main.deterministicReleaseRebuild mainWorkflow,
+      Bool.not (Text.isInfixOf "nix build --max-jobs 1 --check" mainWorkflow),
+      Bool.not (Text.isInfixOf "nix build --max-jobs 1 --check" releaseWorkflow),
+      Bool.not (Text.isInfixOf "nix build --max-jobs 1 --check" verifyWorkflow),
+      Text.isInfixOf "--rebuild --no-link --no-update-lock-file --print-build-logs .#automation-checks" releaseWorkflow,
+      Text.isInfixOf "--rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-build" releaseWorkflow,
+      Text.isInfixOf "--rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-control" releaseWorkflow,
+      Text.isInfixOf "--rebuild --no-link --no-update-lock-file --print-build-logs .#automation-checks" verifyWorkflow,
+      Text.isInfixOf "--rebuild --no-link --no-update-lock-file --print-build-logs .#automation-release-control" verifyWorkflow,
+      Text.isInfixOf
+        "steps:\n      - name: Install Nix before checking out any repository source"
+        cacheWorkflow,
+      Eq.eq (List.length (Text.splitOn
+        "uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6"
+        cacheWorkflow)) 2,
+      Text.isInfixOf "github_access_token: disabled" cacheWorkflow,
+      Text.isInfixOf
+        "extra_nix_config: |\n            access-tokens =\n            extra-substituters ="
+        cacheWorkflow,
+      Text.isInfixOf
+        "filetransfer-retry-attempts = 2\n      - name: Check out the immutable trusted workflow source"
+        cacheWorkflow,
+      Text.isInfixOf
+        "run: ./trusted-cache-checker assert-cache-host"
+        cacheWorkflow,
+      Text.isInfixOf
+        "run: ./trusted-cache-checker assert-cache-host trusted request"
+        cacheWorkflow,
+      Text.isInfixOf
+        "path: request\n          persist-credentials: false\n      - name: Assert checkouts left no credential before any build"
+        cacheWorkflow,
+      Text.isInfixOf
+        "run: ./trusted-cache-checker assert-cache-host trusted request\n      - name: Build trusted locked Cachix client"
+        cacheWorkflow,
+      Text.isInfixOf "workflows:\n      - Cache request" cacheWorkflow,
+      Text.isInfixOf "github.event.workflow_run.event == 'push'" cacheWorkflow,
+      Text.isInfixOf
+        "github.event.workflow_run.head_repository.full_name == github.repository"
+        cacheWorkflow,
+      Text.isInfixOf "ref: ${{ github.workflow_sha }}\n          path: trusted" cacheWorkflow,
+      Text.isInfixOf "ref: ${{ github.event.workflow_run.head_sha }}" cacheWorkflow,
+      Text.isInfixOf "path: request" cacheWorkflow,
+      Bool.not (Text.isInfixOf "head_branch" cacheWorkflow),
+      Bool.not (Text.isInfixOf "refs/heads/main" cacheWorkflow),
+      Bool.not (Text.isInfixOf "github.ref_protected" cacheWorkflow),
+      Bool.not (Text.isInfixOf "workflow_run.conclusion" cacheWorkflow),
+      Text.isInfixOf "persist-credentials: false" cacheWorkflow,
+      Bool.not (Text.isInfixOf "max-parallel:" cacheWorkflow),
+      Text.isInfixOf "group: nix-cache-seed" cacheWorkflow,
+      Text.isInfixOf "cancel-in-progress: false" cacheWorkflow,
+      Text.isInfixOf "timeout-minutes: 180" cacheWorkflow,
+      Text.isInfixOf "permissions:\n  contents: read" cacheWorkflow,
+      Bool.not (Text.isInfixOf "workflow_dispatch" cacheWorkflow),
+      Bool.not (Text.isInfixOf "needs:" cacheWorkflow),
+      Bool.not (Text.isInfixOf "environment:" cacheWorkflow),
+      Bool.not (Text.isInfixOf "cachix/cachix-action@" cacheWorkflow),
+      Bool.not (Text.isInfixOf "watch-store" cacheWorkflow),
+      Bool.not (Text.isInfixOf ".#default" cacheWorkflow),
+      Bool.not (Text.isInfixOf ".#static-native" cacheWorkflow),
+      Bool.not (Text.isInfixOf ".#release-static-native" cacheWorkflow),
+      Bool.not (Text.isInfixOf ".#checks." cacheWorkflow),
+      Text.isInfixOf "./trusted#cache-client^bin --out-link trusted-cache-client" cacheWorkflow,
+      Text.isInfixOf "./trusted#automation-checks --out-link trusted-cache-checker" cacheWorkflow,
+      Bool.not (Text.isInfixOf "./request#cache-client" cacheWorkflow),
+      Bool.not (Text.isInfixOf "./request#automation-checks" cacheWorkflow),
+      Bool.not (Text.isInfixOf "result-cache-client" cacheWorkflow),
+      Bool.not (Text.isInfixOf "result-cache-automation-checks" cacheWorkflow),
+      Text.isInfixOf
+        "working-directory: request\n        run: ../trusted-cache-checker policy"
+        cacheWorkflow,
+      Text.isInfixOf
+        "id: build-cache-root\n        env:\n          CACHE_TARGET: ${{ matrix.target }}\n        working-directory: request\n        run: ../trusted-cache-checker build-cache-root ../cache-output"
+        cacheWorkflow,
+      Text.isInfixOf
+        "id: validate-cache-closure\n        env:\n          CACHE_TARGET: ${{ matrix.target }}\n          NIX_SYSTEM: ${{ matrix.system }}\n        working-directory: request\n        run: ../trusted-cache-checker check-cache-closure ../cache-output"
+        cacheWorkflow,
+      Text.isInfixOf
+        "run: nix path-info --json --recursive --size --closure-size ./cache-output"
+        cacheWorkflow,
+      Bool.not
+        (Text.isInfixOf
+          "run: nix path-info --json --recursive --size --closure-size cache-output"
+          cacheWorkflow),
+      Bool.not (Text.isInfixOf "./request#${{ matrix.target }}" cacheWorkflow),
+      Bool.not (Text.isInfixOf "cachix watch-exec" cacheWorkflow),
+      Eq.eq (List.length (Text.splitOn "check-cache-closure" cacheWorkflow)) 2,
+      Eq.eq (List.length (Text.splitOn "cachix push" cacheWorkflow)) 2,
+      Text.isInfixOf "fail-fast: false" cacheWorkflow,
+      Text.isInfixOf
+        "matrix:\n        target:\n          - automation-checks\n          - cache-seed-static-toolchain\n          - cache-seed-static-haskell\n          - automation-release-build\n          - automation-release-control\n          - automation-tests\n          - automation\n        system:\n          - x86_64-linux\n          - aarch64-linux"
+        cacheWorkflow,
+      Text.isInfixOf "- cache-seed-static-toolchain" cacheWorkflow,
+      Text.isInfixOf "- cache-seed-static-haskell" cacheWorkflow,
+      Text.isInfixOf "- automation-checks" cacheWorkflow,
+      Text.isInfixOf "- automation-release-build" cacheWorkflow,
+      Text.isInfixOf "- automation-release-control" cacheWorkflow,
+      Text.isInfixOf "- automation-tests" cacheWorkflow,
+      Text.isInfixOf "- automation\n" cacheWorkflow,
+      Bool.not (Text.isInfixOf "- cache-seed\n" cacheWorkflow),
+      Bool.not (Text.isInfixOf "- cache-seed-static-c-runtime\n" cacheWorkflow),
+      Bool.not (Text.isInfixOf "- cache-seed-static-compiler\n" cacheWorkflow),
+      Bool.not (Text.isInfixOf "- cache-seed-automation\n" cacheWorkflow),
+      Text.isInfixOf
+        "if: >-\n          always() &&\n          steps.build-cache-root.outcome == 'success' &&\n          steps.validate-cache-closure.outcome == 'success'"
+        cacheWorkflow,
+      Text.isInfixOf "CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}" cacheWorkflow,
+      Text.isInfixOf "CACHIX_SIGNING_KEY: ${{ secrets.CACHIX_SIGNING_KEY }}" cacheWorkflow,
+      Eq.eq (List.length (Text.splitOn "CACHIX_AUTH_TOKEN" cacheWorkflow)) 3,
+      Eq.eq (List.length (Text.splitOn "CACHIX_SIGNING_KEY" cacheWorkflow)) 3,
+      Text.isSuffixOf
+        "run: ./trusted-cache-client-bin/bin/cachix push hell-app-image-compilation cache-output"
+        (Text.strip cacheWorkflow),
+      Bool.not (Text.isInfixOf "secrets.CACHIX" requestWorkflow),
+      Bool.not (Text.isInfixOf "github.event.workflow_run.head_sha }}#cache" cacheWorkflow),
+      Eq.eq (List.length (Text.splitOn "allowSubstitutes = false;" flake)) 4,
+      Eq.eq (List.length (Text.splitOn "preferLocalBuild = true;" flake)) 4,
+      Bool.not (Text.isInfixOf "hell-ci-cache-seed-v1-${system}" flake),
+      Bool.not (Text.isInfixOf "\n        cacheSeed =" flake),
+      Text.isInfixOf "cache-client = pkgs.cachix;" flake,
+      Bool.not (Text.isInfixOf "\n          cache-seed =" flake),
+      Text.isInfixOf "cache-seed-automation = automationCacheSeed;" flake,
+      Text.isInfixOf "cache-seed-static-c-runtime = staticCRuntimeCacheSeed;" flake,
+      Text.isInfixOf "cache-seed-static-compiler = staticCompilerCacheSeed;" flake,
+      Text.isInfixOf "cache-seed-static-haskell = staticHaskellCacheSeed;" flake,
+      Text.isInfixOf "cache-seed-static-toolchain = staticToolchainCacheSeed;" flake,
+      Text.isInfixOf "hell-ci-cache-static-c-runtime-v2-${system}" flake,
+      Text.isInfixOf "hell-ci-cache-static-compiler-v2-${system}" flake,
+      Text.isInfixOf "hell-ci-cache-automation-v2-${system}" flake,
+      Text.isInfixOf "staticCompilerCacheRoots ++ staticCRuntimeCacheRoots" flake,
+      Text.isInfixOf
+        "staticCompilerCacheRoots = [\n          {\n            name = \"toolchain-ghc\";\n            path = staticNativePackages.haskellPackages.ghc;\n          }\n        ];"
+        flake,
+      Text.isInfixOf
+        "staticCRuntimeCacheRoots = [\n          {\n            name = \"toolchain-cc\";\n            path = staticNativePackages.stdenv.cc;\n          }\n          {\n            name = \"toolchain-binutils\";\n            path = staticNativePackages.stdenv.cc.bintools;\n          }\n          {\n            name = \"toolchain-musl\";\n            path = staticNativePackages.stdenv.cc.libc;\n          }\n          {\n            name = \"toolchain-libffi\";\n            path = staticNativePackages.libffi;\n          }\n          {\n            name = \"toolchain-zlib\";\n            path = staticNativePackages.zlib;\n          }\n        ] ++ pkgs.lib.optional\n          (staticNativePackages.gmp != null)\n          {\n            name = \"toolchain-gmp\";\n            path = staticNativePackages.gmp;\n          };"
+        flake,
+      Text.isInfixOf
+        "automationCacheRoots = [\n          {\n            name = \"automation-dispatcher\";\n            path = hellAutomation;\n          }\n          {\n            name = \"automation-checks\";\n            path = hellAutomationChecks;\n          }\n          {\n            name = \"automation-release-build\";\n            path = hellAutomationReleaseBuild;\n          }\n          {\n            name = \"automation-release-control\";\n            path = hellAutomationReleaseControl;\n          }\n          {\n            name = \"automation-tests\";\n            path = hellAutomationTests;\n          }\n        ];"
+        flake,
+      Bool.not (Text.isInfixOf "path = staticNative;" flake),
+      Bool.not (Text.isInfixOf "path = releaseStaticNative;" flake),
+      Bool.not (Text.isInfixOf "path = app;" flake)
+    ]
+
+cacheInstallable = \target ->
+  if Eq.eq target "cache-seed-static-toolchain"
+    then ".#cache-seed-static-toolchain"
+    else if Eq.eq target "cache-seed-static-haskell"
+      then ".#cache-seed-static-haskell"
+      else if Eq.eq target "automation-checks"
+        then ".#automation-checks"
+        else if Eq.eq target "automation-release-build"
+          then ".#automation-release-build"
+          else if Eq.eq target "automation-release-control"
+            then ".#automation-release-control"
+            else if Eq.eq target "automation-tests"
+              then ".#automation-tests"
+              else if Eq.eq target "automation"
+                then ".#automation"
+                else ""
+
+cacheOutputSelector = \system target ->
+  if Eq.eq system "x86_64-linux"
+    then
+      if Eq.eq target "cache-seed-static-toolchain"
+        then ".#packages.x86_64-linux.cache-seed-static-toolchain.outPath"
+        else if Eq.eq target "cache-seed-static-haskell"
+          then ".#packages.x86_64-linux.cache-seed-static-haskell.outPath"
+          else if Eq.eq target "automation-checks"
+            then ".#packages.x86_64-linux.automation-checks.outPath"
+            else if Eq.eq target "automation-release-build"
+              then ".#packages.x86_64-linux.automation-release-build.outPath"
+              else if Eq.eq target "automation-release-control"
+                then ".#packages.x86_64-linux.automation-release-control.outPath"
+                else if Eq.eq target "automation-tests"
+                  then ".#packages.x86_64-linux.automation-tests.outPath"
+                  else if Eq.eq target "automation"
+                    then ".#packages.x86_64-linux.automation.outPath"
+                    else ""
+    else if Eq.eq system "aarch64-linux"
+      then
+        if Eq.eq target "cache-seed-static-toolchain"
+          then ".#packages.aarch64-linux.cache-seed-static-toolchain.outPath"
+          else if Eq.eq target "cache-seed-static-haskell"
+            then ".#packages.aarch64-linux.cache-seed-static-haskell.outPath"
+            else if Eq.eq target "automation-checks"
+              then ".#packages.aarch64-linux.automation-checks.outPath"
+              else if Eq.eq target "automation-release-build"
+                then ".#packages.aarch64-linux.automation-release-build.outPath"
+                else if Eq.eq target "automation-release-control"
+                  then ".#packages.aarch64-linux.automation-release-control.outPath"
+                  else if Eq.eq target "automation-tests"
+                    then ".#packages.aarch64-linux.automation-tests.outPath"
+                    else if Eq.eq target "automation"
+                      then ".#packages.aarch64-linux.automation.outPath"
+                      else ""
+      else ""
+
+forbiddenCacheSelectors = \system ->
+  if Eq.eq system "x86_64-linux"
+    then
+      [ (".#packages.x86_64-linux.default.outPath",
+         ".#packages.x86_64-linux.default.allowSubstitutes",
+         ".#packages.x86_64-linux.default.preferLocalBuild"),
+        (".#packages.x86_64-linux.static-arm64.outPath",
+         ".#packages.x86_64-linux.static-arm64.allowSubstitutes",
+         ".#packages.x86_64-linux.static-arm64.preferLocalBuild"),
+        (".#packages.x86_64-linux.static-amd64.outPath",
+         ".#packages.x86_64-linux.static-amd64.allowSubstitutes",
+         ".#packages.x86_64-linux.static-amd64.preferLocalBuild"),
+        (".#packages.x86_64-linux.static-native.outPath",
+         ".#packages.x86_64-linux.static-native.allowSubstitutes",
+         ".#packages.x86_64-linux.static-native.preferLocalBuild"),
+        (".#packages.x86_64-linux.release-static-native.outPath",
+         ".#packages.x86_64-linux.release-static-native.allowSubstitutes",
+         ".#packages.x86_64-linux.release-static-native.preferLocalBuild"),
+        (".#checks.x86_64-linux.automation.outPath",
+         ".#checks.x86_64-linux.automation.allowSubstitutes",
+         ".#checks.x86_64-linux.automation.preferLocalBuild"),
+        (".#checks.x86_64-linux.metadata.outPath",
+         ".#checks.x86_64-linux.metadata.allowSubstitutes",
+         ".#checks.x86_64-linux.metadata.preferLocalBuild"),
+        (".#checks.x86_64-linux.hpack-drift.outPath",
+         ".#checks.x86_64-linux.hpack-drift.allowSubstitutes",
+         ".#checks.x86_64-linux.hpack-drift.preferLocalBuild"),
+        (".#checks.x86_64-linux.documentation.outPath",
+         ".#checks.x86_64-linux.documentation.allowSubstitutes",
+         ".#checks.x86_64-linux.documentation.preferLocalBuild"),
+        (".#checks.x86_64-linux.source-distribution.outPath",
+         ".#checks.x86_64-linux.source-distribution.allowSubstitutes",
+         ".#checks.x86_64-linux.source-distribution.preferLocalBuild"),
+        (".#checks.x86_64-linux.release-static-native.outPath",
+         ".#checks.x86_64-linux.release-static-native.allowSubstitutes",
+         ".#checks.x86_64-linux.release-static-native.preferLocalBuild"),
+        (".#checks.x86_64-linux.build.outPath",
+         ".#checks.x86_64-linux.build.allowSubstitutes",
+         ".#checks.x86_64-linux.build.preferLocalBuild")
+      ]
+    else if Eq.eq system "aarch64-linux"
+      then
+        [ (".#packages.aarch64-linux.default.outPath",
+           ".#packages.aarch64-linux.default.allowSubstitutes",
+           ".#packages.aarch64-linux.default.preferLocalBuild"),
+          (".#packages.aarch64-linux.static-arm64.outPath",
+           ".#packages.aarch64-linux.static-arm64.allowSubstitutes",
+           ".#packages.aarch64-linux.static-arm64.preferLocalBuild"),
+          (".#packages.aarch64-linux.static-amd64.outPath",
+           ".#packages.aarch64-linux.static-amd64.allowSubstitutes",
+           ".#packages.aarch64-linux.static-amd64.preferLocalBuild"),
+          (".#packages.aarch64-linux.static-native.outPath",
+           ".#packages.aarch64-linux.static-native.allowSubstitutes",
+           ".#packages.aarch64-linux.static-native.preferLocalBuild"),
+          (".#packages.aarch64-linux.release-static-native.outPath",
+           ".#packages.aarch64-linux.release-static-native.allowSubstitutes",
+           ".#packages.aarch64-linux.release-static-native.preferLocalBuild"),
+          (".#checks.aarch64-linux.automation.outPath",
+           ".#checks.aarch64-linux.automation.allowSubstitutes",
+           ".#checks.aarch64-linux.automation.preferLocalBuild"),
+          (".#checks.aarch64-linux.metadata.outPath",
+           ".#checks.aarch64-linux.metadata.allowSubstitutes",
+           ".#checks.aarch64-linux.metadata.preferLocalBuild"),
+          (".#checks.aarch64-linux.hpack-drift.outPath",
+           ".#checks.aarch64-linux.hpack-drift.allowSubstitutes",
+           ".#checks.aarch64-linux.hpack-drift.preferLocalBuild"),
+          (".#checks.aarch64-linux.documentation.outPath",
+           ".#checks.aarch64-linux.documentation.allowSubstitutes",
+           ".#checks.aarch64-linux.documentation.preferLocalBuild"),
+          (".#checks.aarch64-linux.source-distribution.outPath",
+           ".#checks.aarch64-linux.source-distribution.allowSubstitutes",
+           ".#checks.aarch64-linux.source-distribution.preferLocalBuild"),
+          (".#checks.aarch64-linux.release-static-native.outPath",
+           ".#checks.aarch64-linux.release-static-native.allowSubstitutes",
+           ".#checks.aarch64-linux.release-static-native.preferLocalBuild"),
+          (".#checks.aarch64-linux.build.outPath",
+           ".#checks.aarch64-linux.build.allowSubstitutes",
+           ".#checks.aarch64-linux.build.preferLocalBuild")
+        ]
+      else []
+
+buildCacheRoot = \root -> do
+  target <- Main.env "CACHE_TARGET"
+  let installable = Main.cacheInstallable target
+  Main.require (Bool.not (Eq.eq installable ""))
+    "cache root is not in the trusted target allowlist"
+  nixTool <- Main.envDefault "HELL_TOOL_NIX" "nix"
+  Main.run nixTool
+    ["build", "--max-jobs", "1", "--no-update-lock-file", "--print-build-logs",
+     installable, "--out-link", root]
+
+checkCacheClosure = \root -> do
+  nixTool <- Main.envDefault "HELL_TOOL_NIX" "nix"
+  system <- Main.env "NIX_SYSTEM"
+  target <- Main.env "CACHE_TARGET"
+  let expectedInstallable = Main.cacheOutputSelector system target
+  Main.require (Bool.not (Eq.eq expectedInstallable ""))
+    "cache system and target pair is not in the trusted allowlist"
+  expectedPath <-
+    Main.capture
+      nixTool
+      ["eval", "--raw", "--no-update-lock-file", expectedInstallable]
+  actualPath <- Main.capture nixTool ["path-info", root]
+  Main.require
+    (Eq.eq (Text.strip actualPath) (Text.strip expectedPath))
+    "cache root does not equal the trusted target's exact output"
+  closure <- Main.capture nixTool ["path-info", "--recursive", root]
+  sizeOutput <- Main.capture nixTool ["path-info", "--closure-size", root]
+  let sizeText =
+        Maybe.maybe
+          (Error.error "cache closure size output is empty")
+          Function.id
+          (Maybe.listToMaybe (List.reverse (Text.words sizeOutput)))
+  closureSize <-
+    Maybe.maybe
+      (Main.die "cache closure size is not an integer")
+      IO.pure
+      (Int.readMaybe sizeText)
+  Main.require
+    (List.or
+      [ Ord.lt closureSize Main.cacheClosureLimit,
+        Eq.eq closureSize Main.cacheClosureLimit
+      ])
+    "cache closure exceeds the reviewed 50 GiB ceiling"
+  Monad.forM_ (Main.forbiddenCacheSelectors system)
+    \(pathSelector, substitutesSelector, localBuildSelector) -> do
+    forbiddenPath <-
+      Main.capture
+        nixTool
+        ["eval", "--raw", "--no-update-lock-file", pathSelector]
+    Main.require
+      (Bool.not (List.elem (Text.strip forbiddenPath) (Text.lines closure)))
+      (Text.concat ["cache closure contains forbidden leaf: ", pathSelector])
+    substitutes <-
+      Main.capture
+        nixTool
+        ["eval", "--json", "--no-update-lock-file", substitutesSelector]
+    Main.require
+      (Eq.eq (Text.strip substitutes) "false")
+      (Text.concat ["forbidden leaf is substitutable: ", pathSelector])
+    localBuild <-
+      Main.capture
+        nixTool
+        ["eval", "--json", "--no-update-lock-file", localBuildSelector]
+    Main.require
+      (Eq.eq (Text.strip localBuild) "true")
+      (Text.concat ["forbidden leaf does not prefer a local build: ", pathSelector])
+  Text.putStrLn "cache closure contract passed"
+
+checkPolicy = do
+  hasGit <- Directory.doesDirectoryExist ".git"
+  files <-
+    if hasGit
+      then do
+        gitTool <- Main.envDefault "HELL_TOOL_GIT" "git"
+        Main.run gitTool ["diff", "--quiet"]
+        Main.run gitTool ["diff", "--cached", "--quiet"]
+        tracked <- Main.capture gitTool ["ls-files", "-z"]
+        IO.pure
+          (List.filter (Bool.not . Text.eq "") (Text.splitOn "\0" tracked))
+      else do
+        findTool <- Main.env "HELL_TOOL_FIND"
+        output <- Main.capture findTool
+          [".", "-type", "f", "-not", "-path", "./dist-newstyle/*", "-print"]
+        IO.pure
+          (List.map
+            (\path -> Maybe.maybe path Function.id (Text.stripPrefix "./" path))
+            (Text.lines output))
+  Main.require
+    (List.and
+      [ Main.shellProgramPath "forbidden.sh",
+        Main.shellProgramPath "forbidden.bash",
+        Bool.not (Main.shellProgramPath "allowed.hell")
+      ])
+    "shell filename policy self-test failed"
+  let shells = List.filter Main.shellProgramPath files
+  Main.require (Eq.eq shells []) "tracked shell program is forbidden"
+  statTool <- Main.envDefault "HELL_TOOL_STAT" "stat"
+  Monad.forM_ files \path -> do
+    bytes <- ByteString.readFile path
+    let body = Text.decodeUtf8 bytes
+    Main.require
+      (Text.isSuffixOf "\n" body)
+      (Text.concat ["tracked file lacks final newline: ", path])
+    mode <- Main.capture statTool ["--format=%a", "--", path]
+    let executable = Text.any (\character -> List.elem character ['1','3','5','7']) (Text.strip mode)
+    if executable
+      then do
+        Main.require (Text.isSuffixOf ".hell" path) (Text.concat ["executable source is not Hell: ", path])
+        Main.require (Text.isPrefixOf "#!/usr/bin/env hell\n" body)
+          (Text.concat ["executable Hell source has wrong shebang: ", path])
+      else IO.pure ()
+    if Text.isPrefixOf "#!" body
+      then Main.require (Text.isSuffixOf ".hell" path) (Text.concat ["non-Hell shebang is forbidden: ", path])
+      else IO.pure ()
+  let workflows =
+        List.filter
+          (\path -> List.or
+            [Text.isPrefixOf ".github/workflows/" path,
+             Text.isSuffixOf "/action.yml" path])
+          files
+  Monad.forM_ workflows \path -> do
+    body <- Text.readFile path
+    let lines = Text.lines body
+    let runLines = List.filter (Text.isInfixOf "run: ") lines
+    let shellLines = List.map Text.strip (List.filter (Text.isInfixOf "shell: ") lines)
+    let composite = Text.isSuffixOf "/action.yml" path
+    if composite
+      then do
+        Main.require
+          (Eq.eq (List.length shellLines) (List.length runLines))
+          "composite action run step lacks its required shell"
+        Main.require
+          (List.and (List.map (Eq.eq "shell: sh") shellLines))
+          "composite action selects a shell other than sh"
+      else Main.require (Eq.eq shellLines []) "normal workflow selects an explicit shell"
+    Main.require (Bool.not (Text.isInfixOf "run: |" body)) "workflow has a command block"
+    Main.require (Bool.not (Text.isInfixOf "run: >" body)) "workflow has a folded command block"
+    Monad.forM_ runLines \line ->
+      do
+        let scalar =
+              Maybe.maybe "" Function.id
+                (Text.stripPrefix "run: " (Text.strip line))
+        let executable =
+              Maybe.maybe "" Function.id (Maybe.listToMaybe (Text.words scalar))
+        Main.require
+          (Bool.not (List.or
+            [ Text.isInfixOf "&&" line, Text.isInfixOf "||" line,
+              Text.isInfixOf "&" line, Text.isInfixOf ";" line,
+              Text.isInfixOf "$" line,
+              Text.isInfixOf "|" line, Text.isInfixOf ">" line,
+              Text.isInfixOf "<" line, Text.isInfixOf "`" line,
+              Text.isInfixOf "(" line, Text.isInfixOf ")" line
+            ]))
+          (Text.concat ["workflow run step contains shell orchestration: ", path])
+        Main.require
+          (Bool.not
+            (List.or
+              [ Eq.eq executable "sh",
+                Eq.eq executable "bash",
+                Text.isSuffixOf "/sh" executable,
+                Text.isSuffixOf "/bash" executable,
+                Text.isInfixOf "run: /usr/bin/env sh " line,
+                Text.isInfixOf "run: /usr/bin/env bash " line
+              ]))
+          (Text.concat ["workflow invokes a script through an interpreter: ", path])
+        Main.require
+          (List.or
+            [ Bool.not (Text.isInfixOf ".hell" scalar),
+              Text.isSuffixOf ".hell" executable
+            ])
+          (Text.concat ["workflow does not invoke its Hell script directly: ", path])
+  flake <- Text.readFile "flake.nix"
+  mainWorkflow <- Text.readFile ".github/workflows/main.yml"
+  releaseWorkflow <- Text.readFile ".github/workflows/release.yml"
+  verifyWorkflow <- Text.readFile ".github/workflows/verify-published.yml"
+  requestWorkflow <- Text.readFile ".github/workflows/cache-request.yml"
+  cacheWorkflow <- Text.readFile ".github/workflows/cache.yml"
+  security <- Text.readFile "SECURITY.md"
+  Main.require
+    (Main.staticBinaryPlacementValid flake)
+    "HELL_STATIC_BINARY must be confined to releaseStaticNative"
+  Main.require
+    (Main.activeCachePolicyValid
+      flake mainWorkflow releaseWorkflow verifyWorkflow requestWorkflow cacheWorkflow)
+    "active native cache policy differs"
+  Monad.forM_
+    [ "public, self-signed Cachix cache",
+      "hell-app-image-compilation",
+      Main.cachePublicKey,
+      "CACHIX_AUTH_TOKEN",
+      "CACHIX_SIGNING_KEY",
+      "github.workflow_sha",
+      "requesting SHA never supplies",
+      "require-sigs = true",
+      "always-allow-substitutes = false",
+      "appends an empty `access-tokens`",
+      "hell-app-image-compilation-v2"
+    ]
+    \required -> Main.requireText required security "native cache activation policy is incomplete"
+  Monad.forM_ ["runCommand", "writeShellScript", "bash -c", "sh -c"] \forbidden ->
+    Main.require (Bool.not (Text.isInfixOf forbidden flake)) "Nix contains forbidden shell orchestration"
+  Monad.forM_
+    ["release/versions.schema.json", "release/release-manifest.schema.json", "release/spdx-2.3.schema.json"]
+    \schema -> do
+      body <- Text.readFile schema
+      Main.require (Bool.not (Text.isInfixOf "\"pattern\"" body)) "repository schema contains a regular expression"
+  let testFiles =
+        List.filter
+          (\path ->
+            List.or
+              [Text.isPrefixOf "test/" path,
+               Text.isPrefixOf "automation/hell-automation-tests" path])
+          files
+  Monad.forM_ testFiles \path -> do
+    body <- Text.readFile path
+    Monad.forM_
+      [ Text.concat ["get-", "regexp"],
+        Text.concat ["--extended-", "regexp"],
+        Text.concat ["sed ", "-E"],
+        Text.concat ["grep ", "-E"]
+      ]
+      \forbidden ->
+        Main.require
+          (Bool.not (Text.isInfixOf forbidden body))
+          (Text.concat ["test infrastructure contains a regular expression: ", path])
+  Text.putStrLn "policy checks passed"
+
+checkMetadata = do
+  versions <- Text.readFile "release/versions.json"
+  source <- Text.readFile "src/Hell.hs"
+  package <- Text.readFile "package.yaml"
+  cabal <- Text.readFile "hell-application-image-compilation.cabal"
+  Monad.forM_
+    [ "\"version\": \"2026-05-29\"",
+      "\"name\": \"Application Image Compilation\"",
+      "\"version\": \"1.0.0\"",
+      "\"tag\": \"application-image-compilation/v1.0.0\"",
+      "\"artifactStem\": \"hell-application-image-compilation-1.0.0-hell-2026-05-29\""
+    ]
+    \required -> Main.requireText required versions "release identity metadata is stale"
+  Monad.forM_
+    [ "hellVersion = \"2026-05-29\"",
+      "applicationImageFeatureName = \"Application Image Compilation\"",
+      "applicationImageFeatureVersion = \"1.0.0\"",
+      "imageFormatVersion = 2",
+      "imageAbiVersion = 2"
+    ]
+    \required -> Main.requireText required source "source identity is stale"
+  Main.requireText "name: hell-application-image-compilation" package "package name is stale"
+  Main.requireText "version: 1.0.0" package "package version is stale"
+  Main.requireText "name:           hell-application-image-compilation" cabal "cabal name is stale"
+  Main.requireText "version:        1.0.0" cabal "cabal version is stale"
+  versionsValue <- Main.jsonFile "release/versions.json"
+  let feature = Main.jsonObjectField "featureRelease" versionsValue
+  let assetsValue = Main.jsonObjectField "assets" feature
+  let assets =
+        Json.value [] (\_ -> []) (\_ -> []) (\_ -> [])
+          (List.map Main.jsonString . Vector.toList) (\_ -> []) assetsValue
+  Main.require
+    (Eq.eq assets
+      [Main.x86Archive, Main.x86Spdx, Main.armArchive, Main.armSpdx, "release.json", "SHA256SUMS"])
+    "release metadata must name exactly the six reviewed assets"
+  repository <- Main.envDefault "GITHUB_REPOSITORY" Main.fixedRepository
+  Main.require (Eq.eq repository Main.fixedRepository) "workflow repository identity differs"
+  refType <- Main.envDefault "GITHUB_REF_TYPE" ""
+  refName <- Main.envDefault "GITHUB_REF_NAME" ""
+  if Eq.eq refType "tag"
+    then do
+      Main.require (Eq.eq refName Main.fixedTag) "tag does not equal reviewed release tag"
+      gitTool <- Main.envDefault "HELL_TOOL_GIT" "git"
+      tagType <- Main.capture gitTool ["cat-file", "-t", refName]
+      Main.require (Eq.eq (Text.strip tagType) "tag") "release tag must be annotated"
+      peeled <- Main.capture gitTool
+        ["rev-parse", "application-image-compilation/v1.0.0^{}"]
+      Main.require (Eq.eq (Text.length (Text.strip peeled)) Main.fullCommitWidth) "tag does not peel to a full commit"
+      Main.run gitTool ["merge-base", "--is-ancestor", Text.strip peeled, "origin/main"]
+    else IO.pure ()
+  Text.putStrLn "release metadata mappings are valid"
+
+checkHpack = do
+  hpackTool <- Main.envDefault "HELL_TOOL_HPACK" "hpack"
+  copyTool <- Main.envDefault "HELL_TOOL_CP" "cp"
+  version <- Main.capture hpackTool ["--version"]
+  Main.require
+    (Eq.eq (Text.strip version) "hpack version 0.38.3")
+    (Text.concat ["hpack 0.38.3 is required; got: ", Text.strip version])
+  Temp.withSystemTempDirectory "hell-hpack" \temporary -> do
+    Main.run copyTool ["package.yaml", Main.joinPath temporary "package.yaml"]
+    Monad.forM_
+      ["CHANGELOG.md", "FORK.md", "LICENSE", "README.md", "RELEASE.md", "SECURITY.md", "SUPPORT.md"]
+      \path -> Main.run copyTool [path, Main.joinPath temporary path]
+    Main.run copyTool ["-R", ".github", "automation", "docs", "release", "test", temporary]
+    Main.runIn temporary hpackTool ["--force"]
+    expected <- ByteString.readFile "hell-application-image-compilation.cabal"
+    actual <- ByteString.readFile (Main.joinPath temporary "hell-application-image-compilation.cabal")
+    Main.require (Eq.eq expected actual) "generated Cabal file has drifted"
+  Text.putStrLn "hpack output is current"
+
+generateDocsIn = \root -> do
+  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" "cabal"
+  ghcTool <- Main.envDefault "HELL_TOOL_GHC" "ghc"
+  let repl = Text.unlines [":l src/Hell.hs", "_generateApiDocs", ":quit"]
+  Temp.withSystemTempDirectory "hell-docs" \temporary -> do
+    let buildDirectory = Main.joinPath temporary "dist-newstyle"
+    cabalEnvironment <- Main.isolatedCabalEnvironment temporary
+    process <-
+      Main.withEnvironment
+        cabalEnvironment
+        (Text.setStdin
+          repl
+          (Process.setWorkingDir
+            root
+            (Process.proc
+              cabalTool
+              [ "repl",
+                "--offline",
+                "-w",
+                ghcTool,
+                "--builddir",
+                buildDirectory
+              ])))
+    _ <- ByteString.readProcess_ process
+    IO.pure ()
+  let apiPath = Main.joinPath root "docs/api/index.html"
+  api <- Text.readFile apiPath
+  if Text.isSuffixOf "\n" api
+    then IO.pure ()
+    else Text.appendFile apiPath "\n"
+  let examplesDirectory = Main.joinPath root "examples"
+  examples <- Directory.listDirectory examplesDirectory
+  fragments <- Monad.forM (List.sort examples) \example -> do
+    let path = Main.joinPath examplesDirectory example
+    input <- Text.readFile path
+    html <-
+      Text.readProcessStdout_
+        (Text.setStdin
+          (Text.unlines ["```haskell", input, "```"])
+          (Process.proc "pandoc" ["--from", "markdown", "--to", "html"]))
+    IO.pure (example, html)
+  css <- Text.readFile (Main.joinPath root "docs/style.css")
+  Text.writeFile
+    (Main.joinPath root "docs/examples/index.html")
+    (Text.concat
+      [ "<!doctype html>\n<html>\n<head>\n<style>",
+        css,
+        "</style>\n</head>\n<body>\n<h1>Hell examples</h1>\n",
+        "<p><a href='../'>Back to homepage</a></p>\n",
+        Text.concat
+          (List.map
+            (\(name, fragment) -> Text.concat ["<h2>", name, "</h2>\n", fragment])
+            fragments),
+        "</body>\n</html>\n"
+      ])
+  Text.putStrLn "generated documentation"
+
+generateDocs = Main.generateDocsIn "."
+
+checkDocs = do
+  expectedApi <- ByteString.readFile "docs/api/index.html"
+  expectedExamples <- ByteString.readFile "docs/examples/index.html"
+  Temp.withSystemTempDirectory "hell-docs-check" \temporary -> do
+    let source = Main.joinPath temporary "source"
+    let sourceDirectory = Main.joinPath source "src"
+    let docsDirectory = Main.joinPath source "docs"
+    let apiDirectory = Main.joinPath docsDirectory "api"
+    let docsExamplesDirectory = Main.joinPath docsDirectory "examples"
+    let examplesDirectory = Main.joinPath source "examples"
+    Monad.forM_
+      [ source,
+        sourceDirectory,
+        docsDirectory,
+        apiDirectory,
+        docsExamplesDirectory,
+        examplesDirectory
+      ]
+      Directory.createDirectory
+    Monad.forM_
+      [ ("src/Hell.hs", Main.joinPath sourceDirectory "Hell.hs"),
+        ("docs/index.js", Main.joinPath docsDirectory "index.js"),
+        ("docs/style.css", Main.joinPath docsDirectory "style.css"),
+        ( "hell-application-image-compilation.cabal",
+          Main.joinPath source "hell-application-image-compilation.cabal"
+        ),
+        ("LICENSE", Main.joinPath source "LICENSE")
+      ]
+      \(input, output) -> Directory.copyFile input output
+    examples <- Directory.listDirectory "examples"
+    Monad.forM_ examples \example ->
+      Directory.copyFile
+        (Main.joinPath "examples" example)
+        (Main.joinPath examplesDirectory example)
+    Main.generateDocsIn source
+    actualApi <- ByteString.readFile (Main.joinPath apiDirectory "index.html")
+    actualExamples <-
+      ByteString.readFile (Main.joinPath docsExamplesDirectory "index.html")
+    Main.require (Eq.eq actualApi expectedApi) "generated API documentation has drifted"
+    Main.require (Eq.eq actualExamples expectedExamples) "generated examples documentation has drifted"
+  homepage <- Text.readFile "docs/index.html"
+  Monad.forM_
+    [ "<title>Hell 2026-05-29 — Application Image Compilation 1.0.0</title>",
+      "Application Image Compilation 1.0.0",
+      "https://github.com/Portfoligno/hell-application-image-compilation/releases",
+      "https://github.com/Portfoligno/hell-application-image-compilation",
+      "blob/main/FORK.md",
+      "blob/main/SUPPORT.md",
+      "blob/main/SECURITY.md"
+    ]
+    \required -> Main.requireText required homepage "homepage identity or policy link is stale"
+  Monad.forM_ ["docs/api/index.html", "docs/examples/index.html"] \path -> do
+    text <- Text.readFile path
+    Main.require (Text.isSuffixOf "\n" text) (Text.concat [path, " lacks final newline"])
+  Text.putStrLn "documentation identity checks passed"
+
+checkSdist = do
+  short <- Main.envDefault "HELL_SDIST_SHORT_TIMEOUT" "120"
+  build <- Main.envDefault "HELL_SDIST_BUILD_TIMEOUT" "600"
+  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" "cabal"
+  ghcTool <- Main.envDefault "HELL_TOOL_GHC" "ghc"
+  timeoutTool <- Main.envDefault "HELL_TOOL_TIMEOUT" "timeout"
+  tarTool <- Main.envDefault "HELL_TOOL_TAR" "tar"
+  Temp.withSystemTempDirectory "hell-sdist" \temporary -> do
+    let sdistBuildDirectory = Main.joinPath temporary "dist-newstyle"
+    cabalEnvironment <- Main.isolatedCabalEnvironment temporary
+    Main.runConfiguredInEnvironment
+      "cabal check"
+      "."
+      cabalEnvironment
+      timeoutTool
+      [short, cabalTool, "check"]
+    Main.runConfiguredInEnvironment
+      "cabal sdist"
+      "."
+      cabalEnvironment
+      timeoutTool
+      [ short,
+        cabalTool,
+        "sdist",
+        "--builddir",
+        sdistBuildDirectory,
+        "--output-directory",
+        temporary
+      ]
+    names <- Directory.listDirectory temporary
+    let archives = List.filter (Text.isSuffixOf ".tar.gz") names
+    Main.require (Eq.eq (List.length archives) 1) "cabal must produce exactly one sdist"
+    let archive = Main.joinPath temporary (Main.only archives)
+    listing <- Main.capture tarTool ["--list", "--gzip", "--file", archive]
+    let root = "hell-application-image-compilation-1.0.0/"
+    allowlistText <- Text.readFile "release/sdist-files.txt"
+    let expectedMembers =
+          List.sort (List.filter (Bool.not . Text.eq "") (Text.lines allowlistText))
+    let archiveMembers =
+          List.sort
+            (List.map
+              (\member ->
+                Maybe.maybe
+                  (Error.error "sdist member is outside its exact root")
+                  Function.id
+                  (Text.stripPrefix root member))
+              (List.filter (Bool.not . Text.isSuffixOf "/") (Text.lines listing)))
+    Main.require (Eq.eq archiveMembers expectedMembers) "sdist member allowlist differs"
+    Main.requireText (Main.joinPath root "LICENSE") listing "sdist lacks LICENSE"
+    Main.requireText
+      (Main.joinPath (Main.joinPath root "src") "Hell.hs")
+      listing
+      "sdist lacks src/Hell.hs"
+    Monad.forM_ ["/.git/", "/.serena/", "/.agents/", "/.codex/", "/dist-newstyle/"]
+      \private -> Main.require (Bool.not (Text.isInfixOf private listing)) "sdist contains private state"
+    let unpacked = Main.joinPath temporary "unpacked"
+    Directory.createDirectory unpacked
+    Main.run tarTool ["--extract", "--gzip", "--file", archive, "--directory", unpacked]
+    let source = Main.joinPath unpacked "hell-application-image-compilation-1.0.0"
+    Main.runConfiguredInEnvironment
+      "offline sdist build"
+      source
+      cabalEnvironment
+      timeoutTool
+      [build, cabalTool, "build", "--offline", "-w", ghcTool, "all"]
+    Main.runConfiguredInEnvironment
+      "offline sdist test"
+      source
+      cabalEnvironment
+      timeoutTool
+      [build, cabalTool, "test", "--offline", "-w", ghcTool, "all"]
+  Text.putStrLn "source distribution checks passed"
+
+nixCheck = do
+  source <- Main.envAlias "SOURCE_ROOT" "sourceRoot"
+  Directory.setCurrentDirectory source
+  tests <- Main.env "HELL_AUTOMATION_TESTS"
+  Main.run tests ["space value", "--leading", "*", "$(literal)", "semi;colon"]
+  mode <- Main.envDefault "HELL_CHECK_MODE" "metadata"
+  if Eq.eq mode "policy" then Main.checkPolicy
+  else if Eq.eq mode "metadata" then Main.checkMetadata
+  else if Eq.eq mode "hpack-drift" then Main.checkHpack
+  else if Eq.eq mode "check-sdist" then Main.checkSdist
+  else if Eq.eq mode "check-docs" then Main.checkDocs
+  else Main.die "unknown HELL_CHECK_MODE"
+  output <- Main.env "out"
+  Text.writeFile output "ok\n"
+
+main = do
+  arguments <- Environment.getArgs
+  let count = List.length arguments
+  let command = Main.argument 0 arguments
+  if Eq.eq command "policy" then do
+    Main.require (Eq.eq count 1) "policy takes no arguments"
+    Main.checkPolicy
+  else if Eq.eq command "metadata" then do
+    Main.require (List.elem count [1,2]) "metadata accepts only --check"
+    Main.checkMetadata
+  else if Eq.eq command "hpack-drift" then Main.checkHpack
+  else if Eq.eq command "check-sdist" then Main.checkSdist
+  else if Eq.eq command "generate-docs" then Main.generateDocs
+  else if Eq.eq command "check-docs" then Main.checkDocs
+  else if Eq.eq command "check-cache-closure" then do
+    Main.require (Eq.eq count 2) "check-cache-closure requires one root"
+    Main.checkCacheClosure (Main.argument 1 arguments)
+  else if Eq.eq command "build-cache-root" then do
+    Main.require (Eq.eq count 2) "build-cache-root requires one output link"
+    Main.buildCacheRoot (Main.argument 1 arguments)
+  else if Eq.eq command "assert-cache-host" then do
+    Main.require (List.elem count [1,3])
+      "assert-cache-host accepts either no repository or trusted and request"
+    Main.assertCacheHost (List.drop 1 arguments)
+  else if Eq.eq command "nix-check" then Main.nixCheck
+  else Main.die "usage: hell-automation checks command"

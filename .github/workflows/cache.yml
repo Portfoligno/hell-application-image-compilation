@@ -1,0 +1,105 @@
+name: Populate Nix cache
+
+on:
+  workflow_run:
+    workflows:
+      - Cache request
+    types:
+      - completed
+
+concurrency:
+  group: nix-cache-seed
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    name: seed (${{ matrix.system }} / ${{ matrix.target }})
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - automation-checks
+          - cache-seed-static-toolchain
+          - cache-seed-static-haskell
+          - automation-release-build
+          - automation-release-control
+          - automation-tests
+          - automation
+        system:
+          - x86_64-linux
+          - aarch64-linux
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - name: Install Nix before checking out any repository source
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: disabled
+          extra_nix_config: |
+            access-tokens =
+            extra-substituters = https://hell-app-image-compilation.cachix.org?priority=30
+            extra-trusted-public-keys = hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE=
+            require-sigs = true
+            always-allow-substitutes = false
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 30
+            filetransfer-retry-attempts = 2
+      - name: Check out the immutable trusted workflow source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Build trusted cache policy checker
+        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs ./trusted#automation-checks --out-link trusted-cache-checker
+      - name: Assert clean cache host before request checkout
+        run: ./trusted-cache-checker assert-cache-host
+      - name: Check out the exact same-repository push
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: request
+          persist-credentials: false
+      - name: Assert checkouts left no credential before any build
+        run: ./trusted-cache-checker assert-cache-host trusted request
+      - name: Build trusted locked Cachix client
+        run: nix build --max-jobs 1 --no-update-lock-file ./trusted#cache-client^bin --out-link trusted-cache-client
+      - name: Validate requesting source cache policy without credentials
+        working-directory: request
+        run: ../trusted-cache-checker policy
+      - name: Build one authorized requesting-SHA cache root without credentials
+        id: build-cache-root
+        env:
+          CACHE_TARGET: ${{ matrix.target }}
+        working-directory: request
+        run: ../trusted-cache-checker build-cache-root ../cache-output
+      - name: Validate exact root and recursive closure with trusted checker
+        id: validate-cache-closure
+        env:
+          CACHE_TARGET: ${{ matrix.target }}
+          NIX_SYSTEM: ${{ matrix.system }}
+        working-directory: request
+        run: ../trusted-cache-checker check-cache-closure ../cache-output
+      - name: Record exact authorized closure sizes without credentials
+        run: nix path-info --json --recursive --size --closure-size ./cache-output
+      - name: Publish only the validated root with the trusted client
+        if: >-
+          always() &&
+          steps.build-cache-root.outcome == 'success' &&
+          steps.validate-cache-closure.outcome == 'success'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          CACHIX_SIGNING_KEY: ${{ secrets.CACHIX_SIGNING_KEY }}
+        run: ./trusted-cache-client-bin/bin/cachix push hell-app-image-compilation cache-output

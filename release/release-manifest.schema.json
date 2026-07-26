@@ -86,7 +86,7 @@
           "minimum": 1
         },
         "compatibilityFingerprint": {
-          "const": "c5fd3286e5ebd3c8"
+          "const": "c0b499f996de5437"
         }
       }
     },
@@ -325,6 +325,7 @@
         "kind": {
           "enum": [
             "direct-cabal-dependency",
+            "ghc-boot-library",
             "linked-component"
           ]
         },

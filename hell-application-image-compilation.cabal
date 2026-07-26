@@ -30,6 +30,9 @@ extra-source-files:
     release/notes-1.0.0.md
     release/README.md
     release/sdist-files.txt
+    automation/hell-automation-checks.hell
+    automation/hell-automation-release-build.hell
+    automation/hell-automation-release-control.hell
     automation/hell-automation-tests.hell
     automation/hell-automation.hell
     .github/actions/setup-hell/programs/publish-setup.hell

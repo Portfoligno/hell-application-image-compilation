@@ -407,7 +407,7 @@ maximumListLength = 100 * 1024
 maximumTotalListElements = 200 * 1024
 
 maximumImageDepth :: Int
-maximumImageDepth = 256
+maximumImageDepth = 512
 
 maximumTermNodes, maximumTypeNodes, maximumDecodedNodes :: Word32
 maximumTermNodes = 100 * 1024
@@ -555,7 +555,11 @@ typeRegistry =
     registryRoots =
       Map.elems supportedTypeConstructors
         <> map snd (Map.elems supportedLits)
-        <> concatMap (collectIRepTypes . (\(_, _, schema, _) -> schema)) (Map.elems polyLits)
+        <> concatMap
+          ( \(_, _, _, constraints, schema, _) ->
+              map fst constraints <> collectIRepTypes schema
+          )
+          (Map.elems polyLits)
         <> concatMap (\(a, b) -> [a, b]) (Map.keys instances.getInstances)
 
 collectIRepTypes :: IRep a -> [SomeTypeRep]
@@ -709,7 +713,7 @@ thawPrimitive ty primitive args = do
         Just (term, _) -> Right term
         Nothing ->
           case Map.lookup (Text.unpack name) polyLits of
-            Just (forall', vars, schema, _) ->
+            Just (forall', vars, _, _, schema, _) ->
               Right $ UForall (NameP $ Text.unpack name) HSE.noSrcSpan () [] forall' vars schema []
             Nothing -> Left $ UnknownPrimitive name
     FPChar value ->
@@ -963,6 +967,192 @@ consumeSymbol = do
 fnv1a64 :: ByteString -> Word64
 fnv1a64 = ByteString.foldl' (\hash byte -> (hash `xor` fromIntegral byte) * 1099511628211) 14695981039346656037
 
+canonicalManifestEntry :: Text -> [Text] -> Text
+canonicalManifestEntry tag fields =
+  tag <> Text.concat (map frame fields)
+  where
+    frame value =
+      Text.concat
+        [ ":",
+          Text.pack $ show $ Text.length value,
+          ":",
+          value
+        ]
+
+data CompatibilityKind
+  = CompatibilityType
+  | CompatibilitySymbol
+  | CompatibilityList
+  | CompatibilityStreamType
+  | CompatibilityKindFunction CompatibilityKind CompatibilityKind
+  deriving (Eq, Ord, Show)
+
+canonicalCompatibilityKind :: CompatibilityKind -> Text
+canonicalCompatibilityKind = \case
+  CompatibilityType -> "type"
+  CompatibilitySymbol -> "symbol"
+  CompatibilityList -> "hell-list"
+  CompatibilityStreamType -> "process-stream"
+  CompatibilityKindFunction argument result ->
+    canonicalManifestEntry
+      "kind-function"
+      [canonicalCompatibilityKind argument, canonicalCompatibilityKind result]
+
+compatibilityTypeVocabulary :: [(Text, SomeTypeRep)]
+compatibilityTypeVocabulary =
+  [ (Text.pack name, rep)
+    | (name, rep) <- Map.toAscList supportedTypeConstructors
+  ]
+    <> [ ("list", SomeTypeRep $ typeRep @[]),
+         ("tuple:2", SomeTypeRep $ typeRep @(,)),
+         ("tuple:3", SomeTypeRep $ typeRep @(,,)),
+         ("tuple:4", SomeTypeRep $ typeRep @(,,,)),
+         ("constraint:Alternative", SomeTypeRep $ typeRep @Alternative),
+         ("constraint:Applicative", SomeTypeRep $ typeRep @Applicative),
+         ("constraint:Eq", SomeTypeRep $ typeRep @Eq),
+         ("constraint:FoldCase", SomeTypeRep $ typeRep @FoldCase),
+         ("constraint:Functor", SomeTypeRep $ typeRep @Functor),
+         ("constraint:Monad", SomeTypeRep $ typeRep @Monad),
+         ("constraint:Monoid", SomeTypeRep $ typeRep @Monoid),
+         ("constraint:Ord", SomeTypeRep $ typeRep @Ord),
+         ("constraint:Semigroup", SomeTypeRep $ typeRep @Semigroup),
+         ("constraint:Show", SomeTypeRep $ typeRep @Show),
+         ("opaque:Accessor", SomeTypeRep $ typeRep @Accessor),
+         ("opaque:SSymbol", SomeTypeRep $ typeRep @SSymbol),
+         ("opaque:IO.BufferMode", SomeTypeRep $ typeRep @IO.BufferMode),
+         ("opaque:IO.IOMode", SomeTypeRep $ typeRep @IO.IOMode),
+         ("opaque:Http.Status", SomeTypeRep $ typeRep @Http.Status),
+         ("opaque:Http.FilePart", SomeTypeRep $ typeRep @Wai.FilePart),
+         ("opaque:Http.Request", SomeTypeRep $ typeRep @Wai.Request),
+         ("opaque:Http.Response", SomeTypeRep $ typeRep @Wai.Response),
+         ("opaque:Http.ResponseReceived", SomeTypeRep $ typeRep @Wai.ResponseReceived),
+         ("opaque:Options.ArgumentFields", SomeTypeRep $ typeRep @Options.ArgumentFields),
+         ("opaque:Options.CommandFields", SomeTypeRep $ typeRep @Options.CommandFields),
+         ("opaque:Options.FlagFields", SomeTypeRep $ typeRep @Options.FlagFields),
+         ("opaque:Options.InfoMod", SomeTypeRep $ typeRep @Options.InfoMod),
+         ("opaque:Options.Mod", SomeTypeRep $ typeRep @Options.Mod),
+         ("opaque:Options.OptionFields", SomeTypeRep $ typeRep @Options.OptionFields),
+         ("opaque:Options.Parser", SomeTypeRep $ typeRep @Options.Parser),
+         ("opaque:Options.ParserInfo", SomeTypeRep $ typeRep @Options.ParserInfo),
+         ("opaque:Process.ProcessConfig", SomeTypeRep $ typeRep @ProcessConfig),
+         ("opaque:Process.StreamSpec", SomeTypeRep $ typeRep @StreamSpec),
+         ("opaque:Process.STInput", SomeTypeRep $ typeRep @('STInput)),
+         ("opaque:Process.STOutput", SomeTypeRep $ typeRep @('STOutput))
+       ]
+
+compatibilityTypeNames :: Map TyConKey Text
+compatibilityTypeNames =
+  case traverse entry compatibilityTypeVocabulary of
+    Left name ->
+      error $ "compatibility type identity is not a bare constructor: " ++ Text.unpack name
+    Right entries
+      | Set.size (Set.fromList $ map fst entries) /= length entries ->
+          error "duplicate compatibility type identity"
+      | Set.size (Set.fromList $ map snd entries) /= length entries ->
+          error "duplicate compatibility runtime type constructor"
+      | Set.fromList (map snd entries) /= Map.keysSet typeRegistry ->
+          error "compatibility type vocabulary does not exactly cover the runtime type registry"
+      | otherwise ->
+          Map.fromList
+            [ (key, name)
+              | (name, key) <- entries
+            ]
+  where
+    entry :: (Text, SomeTypeRep) -> Either Text (Text, TyConKey)
+    entry (name, SomeTypeRep rep) =
+      case rep of
+        con@Type.Con {} -> Right (name, typeRepKey con)
+        _ -> Left name
+
+canonicalTypeRep :: SomeTypeRep -> Text
+canonicalTypeRep (SomeTypeRep rep) =
+  case rep of
+    Type.Fun argument result ->
+      canonicalManifestEntry
+        "function"
+        [ canonicalTypeRep $ SomeTypeRep argument,
+          canonicalTypeRep $ SomeTypeRep result
+        ]
+    Type.App constructor argument ->
+      canonicalManifestEntry
+        "application"
+        [ canonicalTypeRep $ SomeTypeRep constructor,
+          canonicalTypeRep $ SomeTypeRep argument
+        ]
+    con@Type.Con {} ->
+      canonicalManifestEntry
+        "constructor"
+        [ Maybe.fromMaybe
+            (error $ "missing compatibility type identity: " ++ show con)
+            (Map.lookup (typeRepKey con) compatibilityTypeNames)
+        ]
+
+canonicalIRep :: (variable -> Text) -> IRep variable -> Text
+canonicalIRep renderVariable = \case
+  IVar variable -> canonicalManifestEntry "variable" [renderVariable variable]
+  IApp constructor argument ->
+    canonicalManifestEntry
+      "application"
+      [canonicalIRep renderVariable constructor, canonicalIRep renderVariable argument]
+  IFun argument result ->
+    canonicalManifestEntry
+      "function"
+      [canonicalIRep renderVariable argument, canonicalIRep renderVariable result]
+  ICon rep -> canonicalManifestEntry "type" [canonicalTypeRep rep]
+
+canonicalPolymorphicEntry ::
+  String ->
+  [TH.Uniq] ->
+  [CompatibilityKind] ->
+  [(SomeTypeRep, TH.Uniq)] ->
+  IRep TH.Uniq ->
+  Text
+canonicalPolymorphicEntry name variables binderKinds constraints schema
+  | length variables /= length binderKinds =
+      error $ "polymorphic compatibility binder mismatch: " ++ name
+  | otherwise =
+      canonicalManifestEntry
+        "polymorphic"
+        [ Text.pack name,
+          canonicalManifestEntry
+            "binders"
+            [ canonicalManifestEntry
+                "binder"
+                [Text.pack $ show index, canonicalCompatibilityKind kind]
+              | (index, kind) <- zip [(0 :: Int) ..] binderKinds
+            ],
+          canonicalManifestEntry
+            "constraints"
+            ( List.sort
+                [ canonicalManifestEntry
+                    "constraint"
+                    [canonicalTypeRep constraint, Text.pack $ show $ normalise variable]
+                  | (constraint, variable) <- constraints
+                ]
+            ),
+          canonicalIRep (Text.pack . show . normalise) schema
+        ]
+  where
+    normalise unique =
+      Maybe.fromMaybe
+        (error $ "unbound polymorphic compatibility variable: " ++ name)
+        (List.elemIndex unique variables)
+
+canonicalInstanceEntries :: [(SomeTypeRep, SomeTypeRep)] -> [Text]
+canonicalInstanceEntries =
+  List.sort
+    . map
+      ( \(constraint, target) ->
+          canonicalManifestEntry
+            "instance"
+            [canonicalTypeRep constraint, canonicalTypeRep target]
+      )
+
+canonicalTypeConstructorEntries :: [Text] -> [Text]
+canonicalTypeConstructorEntries =
+  List.sort
+    . map (canonicalManifestEntry "type-constructor" . pure)
+
 imageCompatibilityManifest :: Text
 imageCompatibilityManifest =
   Text.unlines $
@@ -974,22 +1164,17 @@ imageCompatibilityManifest =
       "integer:sign-byte,big-endian-width,big-endian-canonical-magnitude",
       "relink:registered-types,registered-primitives,typed-check,io-unit"
     ]
-      <> [ "literal:" <> Text.pack name <> ":" <> Text.pack (show rep)
+      <> [ canonicalManifestEntry
+             "literal"
+             [Text.pack name, canonicalTypeRep rep]
            | (name, (_, rep)) <- Map.toAscList supportedLits
          ]
-      <> [ "polymorphic:"
-             <> Text.pack name
-             <> ":"
-             <> Text.pack (show $ fmap normalise schema)
-           | (name, (_, vars, schema, _)) <- Map.toAscList polyLits,
-             let normalise unique = Maybe.fromMaybe (-1) $ List.elemIndex unique vars
+      <> [ canonicalPolymorphicEntry name vars binderKinds constraints schema
+           | (name, (_, vars, binderKinds, constraints, schema, _)) <-
+               Map.toAscList polyLits
          ]
-      <> [ "type-constructor:" <> Text.pack (show key)
-           | key <- Map.keys typeRegistry
-         ]
-      <> [ "instance:" <> Text.pack (show key)
-           | key <- Map.keys instances.getInstances
-         ]
+      <> canonicalTypeConstructorEntries (Map.elems compatibilityTypeNames)
+      <> canonicalInstanceEntries (Map.keys instances.getInstances)
 
 imageCompatibilityFingerprint :: Word64
 imageCompatibilityFingerprint = fnv1a64 $ Text.encodeUtf8 imageCompatibilityManifest
@@ -2606,6 +2791,9 @@ desugarPrimAlts
   -> [PrimCons] -- ^ (cons, bindings, rhs)
   -> Maybe WildPat
   -> Either DesugarError (HSE.Exp HSE.SrcSpanInfo)
+desugarPrimAlts _ accessor _ _
+  | not ('.' `elem` accessor) =
+      Left $ UnsupportedSyntax $ "invalid primitive accessor separator " <> accessor
 desugarPrimAlts l accessor consesFound mwildpat =
   case lookup accessor primitiveSumTypes of
     Nothing -> Left $ UnsupportedSyntax $ "invalid primitive accessor " <> accessor
@@ -2615,7 +2803,11 @@ desugarPrimAlts l accessor consesFound mwildpat =
   where
     accessorE =
       HSE.Var l (HSE.Qual l (HSE.ModuleName l prefix) (HSE.Ident l string))
-    (prefix,drop 1 -> string) = List.break (=='.') accessor
+    (prefix, separatorAndString) = List.break (=='.') accessor
+    string =
+      Maybe.fromMaybe
+        (error "primitive accessor separator invariant")
+        (List.stripPrefix "." separatorAndString)
     makeAlt (cons, arity) =
       case find ((==cons) . (.constructor)) consesFound of
         Nothing ->
@@ -2662,11 +2854,11 @@ desugarPolyQName qname treps =
   case qname of
     HSE.Qual l (HSE.ModuleName _ prefix) (HSE.Ident _ string)
       | let namep = (prefix ++ "." ++ string),
-        Just (forall', vars, irep, _) <- Map.lookup namep polyLits -> do
+        Just (forall', vars, _, _, irep, _) <- Map.lookup namep polyLits -> do
           pure (UForall (NameP namep) l () treps forall' vars irep [])
     HSE.UnQual l (HSE.Symbol _ string)
       | let namep = string,
-        Just (forall', vars, irep, _) <- Map.lookup string polyLits -> do
+        Just (forall', vars, _, _, irep, _) <- Map.lookup string polyLits -> do
           pure (UForall (NameP namep) l () treps forall' vars irep [])
     HSE.Special l (HSE.UnitCon {}) ->
       pure $ litWithSpan UnitP l ()
@@ -3145,7 +3337,16 @@ supportedLits =
 -- a big TH block. So I introduce explicit layout immediately, that
 -- lets me put all the related components for TH generation inside
 -- here and stay readable.
-polyLits :: Map String (Forall, [TH.Uniq], IRep TH.Uniq, TH.Type)
+polyLits ::
+  Map
+    String
+    ( Forall,
+      [TH.Uniq],
+      [CompatibilityKind],
+      [(SomeTypeRep, TH.Uniq)],
+      IRep TH.Uniq,
+      TH.Type
+    )
 polyLits =
   $( let -- Top-level expression generated by this TH declaration.
          toplevel :: Q TH.Exp
@@ -3168,8 +3369,35 @@ polyLits =
                                map
                                  (TH.litE . TH.integerL . nameUnique . fst . tyVarBndrNameKind)
                                  tyVarBndrs
+                           binderKinds =
+                             TH.listE $
+                               map
+                                 (compatibilityKindE . snd . tyVarBndrNameKind)
+                                 tyVarBndrs
+                           constraintMetadata =
+                             TH.listE $
+                               map
+                                 ( \(className, variableName) ->
+                                     [|
+                                       ( SomeTypeRep $ TypeRep @($(TH.conT className)),
+                                         $(TH.litE $ TH.integerL $ nameUnique variableName)
+                                       )
+                                       |]
+                                 )
+                                 constraints
                            irep = typeToIRep qualifiedType
-                        in [|((name, ($forall', $uniques, $irep, typeForDocs)))|]
+                        in [|
+                             ( ( name,
+                                 ( $forall',
+                                   $uniques,
+                                   $binderKinds,
+                                   $constraintMetadata,
+                                   $irep,
+                                   typeForDocs
+                                 )
+                               )
+                             )
+                             |]
            [|Map.fromList $generated|]
 
          -- By default, the term is whatever is in the expression. For record
@@ -3266,6 +3494,24 @@ polyLits =
                  [|ICon (SomeTypeRep $(TH.appTypeE (TH.varE 'typeRep) (pure ty0)))|]
                t -> error $ "Unexpected type shape: " ++ show t
            )
+
+         compatibilityKindE :: TH.Kind -> Q TH.Exp
+         compatibilityKindE = \case
+           TH.StarT -> [|CompatibilityType|]
+           TH.ConT name ->
+             case TH.nameBase name of
+               "Type" -> [|CompatibilityType|]
+               "Symbol" -> [|CompatibilitySymbol|]
+               "List" -> [|CompatibilityList|]
+               "StreamType" -> [|CompatibilityStreamType|]
+               other -> error $ "Unsupported compatibility binder kind: " ++ other
+           TH.AppT (TH.AppT TH.ArrowT argument) result ->
+             [|
+               CompatibilityKindFunction
+                 $(compatibilityKindE argument)
+                 $(compatibilityKindE result)
+               |]
+           kind -> error $ "Unsupported compatibility binder kind: " ++ show kind
 
          -- Get the unique integer for a name; hard errors if not available.
          nameUnique :: TH.Name -> Integer
@@ -3649,7 +3895,7 @@ tuple' _ = error "Bad compile-time lookup for tuple'."
 
 unsafeGetForall :: String -> HSE.SrcSpanInfo -> UTerm ()
 unsafeGetForall key l = Maybe.fromMaybe (error $ "Bad compile-time lookup for " ++ key) $ do
-  (forall', vars, irep, _) <- Map.lookup key polyLits
+  (forall', vars, _, _, irep, _) <- Map.lookup key polyLits
   pure (UForall (NameP key) l () [] forall' vars irep [])
 
 --------------------------------------------------------------------------------
@@ -4377,7 +4623,7 @@ _generateApiDocs = do
         let groups' =
               excludeHidden $
                 Map.toList $
-                  fmap (\(_, _, _, ty) -> Right ty) polyLits
+                  fmap (\(_, _, _, _, _, ty) -> Right ty) polyLits
         for_ (List.groupBy (Function.on (==) (takeWhile (/= '.') . fst)) $ List.sortOn fst $ groups <> groups') \group -> do
           h3_ [class_ "searchableHeading"] $ for_ (take 1 group) \(x, _) -> toHtml $ takeWhile (/= '.') x
           ul_ do
@@ -4621,8 +4867,25 @@ imageSpec = do
         `shouldBe` "resource budget exceeded: thaw nodes"
 
     it "binds runtime ABI identity to schema and registry compatibility" do
-      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "literal:Text.putStrLn:"
-      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "polymorphic:IO.pure:"
+      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "literal:13:Text.putStrLn:"
+      imageCompatibilityManifest `shouldSatisfy` Text.isInfixOf "polymorphic:7:IO.pure:"
+      let instanceKeys = Map.keys instances.getInstances
+      canonicalInstanceEntries instanceKeys
+        `shouldBe` canonicalInstanceEntries (reverse instanceKeys)
+      let vocabularyNames = map fst compatibilityTypeVocabulary
+          vocabularyTypes = map snd compatibilityTypeVocabulary
+      canonicalTypeConstructorEntries vocabularyNames
+        `shouldBe` canonicalTypeConstructorEntries (reverse vocabularyNames)
+      Set.size (Set.fromList vocabularyNames)
+        `shouldBe` length vocabularyNames
+      Set.size (Set.fromList vocabularyTypes)
+        `shouldBe` length vocabularyTypes
+      Set.fromList vocabularyTypes
+        `shouldBe` Set.fromList (Map.elems typeRegistry)
+      canonicalManifestEntry "entry" ["a", "bc"]
+        `shouldNotBe` canonicalManifestEntry "entry" ["ab", "c"]
+      Text.pack (showHex imageCompatibilityFingerprint "")
+        `shouldBe` "c0b499f996de5437"
       runtimeAbiFingerprintWith imageCompatibilityFingerprint "static"
         `shouldNotBe` runtimeAbiFingerprintWith (imageCompatibilityFingerprint `xor` 1) "static"
 
@@ -4749,6 +5012,21 @@ imageSpec = do
         (frozenTypeBytes $ FTApp intType intType)
         `shouldSatisfy` Either.isLeft
 
+    it "enforces the configured image nesting boundary" do
+      let unitType = FTCon $ typeRepKey $ typeRep @()
+          leaf = FPrim unitType FPUnit []
+          nested count =
+            foldr
+              (\_ body -> FLam unitType (FSingleton "value") body)
+              leaf
+              [1 .. count]
+          decodeTerm =
+            runImageGetFromBytes initialDecodeBudget (getFrozenTerm 0)
+              . frozenTermBytes
+      decodeTerm (nested $ maximumImageDepth - 1) `shouldSatisfy` Either.isRight
+      decodeTerm (nested maximumImageDepth)
+        `shouldBe` Left "image nesting exceeds limit"
+
     it "enforces aggregate text, list, thaw, and link budgets" do
       runImageGetFromBytes
         initialDecodeBudget {remainingTextBytes = 2}
@@ -4825,7 +5103,7 @@ imageSpec = do
       Temp.withSystemTempDirectory "hell-image-mode" \directory -> do
         let path = directory FilePath.</> "image"
         S8.writeFile path "image"
-        Posix.setFileMode path 0o6777
+        Posix.setFileMode path 0o777
         setApplicationExecutableMode path
         status <- Posix.getFileStatus path
         Posix.fileMode status .&. 0o7777 `shouldBe` 0o755

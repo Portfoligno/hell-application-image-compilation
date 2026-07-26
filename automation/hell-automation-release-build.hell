@@ -1,0 +1,539 @@
+#!/usr/bin/env hell
+
+-- Runtime, bundle, and deterministic release-package automation.
+
+joinPath = \parent child ->
+  Maybe.maybe
+    (Text.concat [parent, "/", child])
+    (\without -> Text.concat [without, "/", child])
+    (Text.stripSuffix "/" parent)
+
+addExtension = \path extension -> Text.concat [path, extension]
+
+directoryMember = \path -> Main.joinPath path ""
+
+die = \message -> Exit.die (Text.concat ["hell automation: ", message])
+
+runConfigured = \label process -> do
+  (code, _out, err) <- Text.readProcess process
+  if Eq.eq code Exit.ExitSuccess
+    then IO.pure ()
+    else Main.die (Text.concat ["child failed: ", label, "\n", err])
+
+run = \executable arguments ->
+  Main.runConfigured executable (Process.proc executable arguments)
+
+requireFails = \executable arguments message -> do
+  (code, _out, _err) <- Text.readProcess (Process.proc executable arguments)
+  Main.require (Bool.not (Eq.eq code Exit.ExitSuccess)) message
+
+capture = \executable arguments -> do
+  (code, out, err) <- Text.readProcess (Process.proc executable arguments)
+  if Eq.eq code Exit.ExitSuccess
+    then IO.pure out
+    else Main.die (Text.concat ["child failed: ", executable, "\n", err])
+
+require = \condition message ->
+  if condition then IO.pure () else Main.die message
+
+requireText = \needle haystack message ->
+  Main.require (Text.isInfixOf needle haystack) message
+
+lowerHex = \width value ->
+  List.and
+    [ Eq.eq (Text.length value) width,
+      Text.all
+        (\character -> List.elem character
+          ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'])
+        value
+    ]
+
+env = \name -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe
+    (Main.die (Text.concat ["missing environment value: ", name]))
+    IO.pure
+    (List.lookup name values)
+
+envDefault = \name fallback -> do
+  values <- Environment.getEnvironment
+  IO.pure (Maybe.maybe fallback Function.id (List.lookup name values))
+
+envAlias = \preferred legacy -> do
+  values <- Environment.getEnvironment
+  Maybe.maybe
+    (Maybe.maybe
+      (Main.die (Text.concat ["missing environment value: ", preferred]))
+      IO.pure
+      (List.lookup legacy values))
+    IO.pure
+    (List.lookup preferred values)
+
+jsonFile = \path -> do
+  bytes <- ByteString.readFile path
+  Maybe.maybe (Main.die (Text.concat ["invalid JSON: ", path])) IO.pure (Json.decode bytes)
+
+jsonObjectField = \name value ->
+  Json.value
+    (Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\_ -> Error.error "expected JSON object")
+    (\object ->
+      Maybe.maybe
+        (Error.error (Text.concat ["missing JSON field: ", name]))
+        Function.id
+        (Map.lookup name object))
+    value
+
+jsonString = \value ->
+  Json.value
+    (Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    Function.id
+    (\_ -> Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    (\_ -> Error.error "expected JSON string")
+    value
+
+jsonNumber = \value ->
+  Json.value
+    (Error.error "expected JSON number")
+    (\_ -> Error.error "expected JSON number")
+    (\_ -> Error.error "expected JSON number")
+    Function.id
+    (\_ -> Error.error "expected JSON number")
+    (\_ -> Error.error "expected JSON number")
+    value
+
+digest = \tool path -> do
+  output <- Main.capture tool ["--", path]
+  IO.pure (Main.only (List.take 1 (Text.words output)))
+
+sizeNumber = \statTool path -> do
+  output <- Main.capture statTool ["--format=%s", "--", path]
+  Maybe.maybe (Main.die "stat returned a non-number") IO.pure (Double.readMaybe (Text.strip output))
+
+exactFiles = \directory expected -> do
+  actual <- Directory.listDirectory directory
+  Main.require
+    (Eq.eq (List.sort actual) (List.sort expected))
+    (Text.concat ["unexpected files in ", directory])
+
+only = \values ->
+  Maybe.maybe (Error.error "expected one value") Function.id (Maybe.listToMaybe values)
+
+argument = \position values ->
+  Maybe.maybe
+    (Error.error "missing command argument")
+    Function.id
+    (Maybe.listToMaybe (List.drop position values))
+
+fixedVersion = "Hell 2026-05-29 — Application Image Compilation 1.0.0"
+fixedTag = "application-image-compilation/v1.0.0"
+fixedRepository = "Portfoligno/hell-application-image-compilation"
+fullCommitWidth = Text.length "0000000000000000000000000000000000000000"
+x86Archive = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz"
+x86Spdx = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json"
+x86Fragment = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.fragment.json"
+armArchive = "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.tar.xz"
+armSpdx = "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.spdx.json"
+armFragment = "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static.fragment.json"
+
+checkRuntime = \binary architecture -> do
+  Main.require
+    (List.or [Eq.eq architecture "x86_64", Eq.eq architecture "aarch64"])
+    "architecture must be x86_64 or aarch64"
+  version <- Main.capture binary ["--version"]
+  Main.require (Eq.eq (Text.strip version) Main.fixedVersion) "runtime identity mismatch"
+  info <- Main.capture binary ["--build-info=json"]
+  infoValue <-
+    Maybe.maybe
+      (Main.die "runtime build info is invalid JSON")
+      IO.pure
+      (Json.decode (Text.encodeUtf8 info))
+  let applicationImage = Main.jsonObjectField "applicationImage" infoValue
+  let actualFingerprint =
+        Main.jsonString (Main.jsonObjectField "compatibilityFingerprint" applicationImage)
+  let expectedFingerprint = "c0b499f996de5437"
+  Main.requireText "\"baseline\":{\"name\":\"Hell\",\"version\":\"2026-05-29\"}" info "runtime baseline mismatch"
+  Main.requireText "\"feature\":{\"name\":\"Application Image Compilation\",\"version\":\"1.0.0\"}" info "runtime feature mismatch"
+  Main.requireText "\"formatVersion\":2" info "runtime image format mismatch"
+  Main.requireText "\"abiVersion\":2" info "runtime image ABI mismatch"
+  Main.require
+    (Eq.eq actualFingerprint expectedFingerprint)
+    (Text.concat
+      [ "runtime compatibility mismatch: expected ",
+        expectedFingerprint,
+        ", actual ",
+        actualFingerprint
+      ])
+  Main.requireText "\"linkage\":\"static\"" info "runtime is not static"
+  Main.requireText (Text.concat ["\"arch\":\"", architecture, "\""]) info "runtime architecture mismatch"
+  fileTool <- Main.envDefault "HELL_TOOL_FILE" "file"
+  readelfTool <- Main.envDefault "HELL_TOOL_READELF" "readelf"
+  copyTool <- Main.envDefault "HELL_TOOL_CP" "cp"
+  truncateTool <- Main.envDefault "HELL_TOOL_TRUNCATE" "truncate"
+  timeoutTool <- Main.envDefault "HELL_TOOL_TIMEOUT" "timeout"
+  chmodTool <- Main.envDefault "HELL_TOOL_CHMOD" "chmod"
+  statTool <- Main.envDefault "HELL_TOOL_STAT" "stat"
+  description <- Main.capture fileTool ["-b", "--", binary]
+  Main.requireText "statically linked" description "file does not report static linkage"
+  programHeaders <- Main.capture readelfTool ["--program-headers", "--", binary]
+  dynamic <- Main.capture readelfTool ["--dynamic", "--", binary]
+  Main.require (Bool.not (Text.isInfixOf "INTERP" programHeaders)) "ELF has an interpreter"
+  Main.require (Bool.not (Text.isInfixOf "NEEDED" dynamic)) "ELF has a dynamic dependency"
+  programOverride <- Main.envDefault "HELL_RUNTIME_GATE_SOURCE" ""
+  Temp.withSystemTempDirectory "hell-runtime-gate" \temporary -> do
+    let generated = Main.joinPath temporary "release-gate.hell"
+    let program = if Eq.eq programOverride "" then generated else programOverride
+    if Eq.eq programOverride ""
+      then Text.writeFile generated (Text.unlines
+        [ "main = do",
+          "  arguments <- Environment.getArgs",
+          "  values <- Async.pooledMapConcurrently (\\value -> IO.pure value) (List.take 32 (List.repeat \"pool\"))",
+          "  Text.putStrLn (Text.concat [\"args:\", Text.intercalate \"|\" arguments])",
+          "  Text.putStrLn (Text.concat [\"pool:\", Int.show (List.length values)])"
+        ])
+      else IO.pure ()
+    Main.run binary ["--check", program]
+    let hostile = ["alpha", "--literal", "space value", "*", "$(literal)", "semi;colon", "line\nbreak"]
+    raw <- Main.capture binary ([program] <> hostile)
+    Main.require
+      (Eq.eq raw "args:alpha|--literal|space value|*|$(literal)|semi;colon|line\nbreak\npool:32\n")
+      "raw runtime argument or bounded-pool gate failed"
+    let image = Main.joinPath temporary "release-gate"
+    Main.run binary ["--compile", program, "--output", image]
+    imageMode <- Main.capture statTool ["--format=%a", "--", image]
+    Main.require
+      (Eq.eq (Text.strip imageMode) "755")
+      "compiled application image mode must be exactly 0755"
+    frozen <- Main.capture image hostile
+    Main.require (Eq.eq frozen raw) "application image behavior differs from source"
+    Main.requireFails binary ["--compile", program, "--output", image]
+      "no-force compilation replaced an existing image"
+    Main.run binary ["--compile", program, "--output", image, "--force"]
+    forcedMode <- Main.capture statTool ["--format=%a", "--", image]
+    Main.require
+      (Eq.eq (Text.strip forcedMode) "755")
+      "forced application image mode must remain exactly 0755"
+    forced <- Main.capture image hostile
+    Main.require (Eq.eq forced raw) "forced image replacement is incomplete"
+    let appended = Main.joinPath temporary "release-gate-appended"
+    Main.run copyTool [image, appended]
+    Text.appendFile appended "corruption\n"
+    Main.requireFails timeoutTool ["10", appended] "appended application image was accepted or did not fail promptly"
+    let truncated = Main.joinPath temporary "release-gate-truncated"
+    Main.run copyTool [image, truncated]
+    Main.run truncateTool ["--size=-1", "--", truncated]
+    Main.requireFails timeoutTool ["10", truncated] "truncated application image was accepted or did not fail promptly"
+    let noForceRace = Main.joinPath temporary "release-gate-no-force-race"
+    raceResults <- Async.pooledMapConcurrently
+      (\_ -> do
+        (code, _out, _err) <- Text.readProcess
+          (Process.proc binary ["--compile", program, "--output", noForceRace])
+        IO.pure (Eq.eq code Exit.ExitSuccess))
+      (List.take 3 (List.repeat "writer"))
+    Main.require (Eq.eq (List.length (List.filter Function.id raceResults)) 1)
+      "concurrent no-force writers did not have exactly one winner"
+    noForceOutput <- Main.capture noForceRace hostile
+    Main.require (Eq.eq noForceOutput raw) "no-force race did not preserve a complete winner"
+    let raced = Main.joinPath temporary "release-gate-raced"
+    _ <- Async.pooledMapConcurrently
+      (\_ -> Main.run binary ["--compile", program, "--output", raced, "--force"])
+      (List.take 3 (List.repeat "writer"))
+    racedOutput <- Main.capture raced hostile
+    Main.require (Eq.eq racedOutput raw) "concurrent force writers left an incomplete image"
+    let denied = Main.joinPath temporary "denied"
+    Directory.createDirectory denied
+    Main.run chmodTool ["0555", "--", denied]
+    let deniedOutput = Main.joinPath denied "image"
+    Main.requireFails binary ["--compile", program, "--output", deniedOutput]
+      "compilation unexpectedly installed into an unwritable directory"
+    deniedExists <- Directory.doesFileExist deniedOutput
+    Main.require (Bool.not deniedExists) "failed installation left an output behind"
+    Main.run chmodTool ["0755", "--", denied]
+    Directory.removeDirectory denied
+  Text.putStrLn (Text.concat ["native static artifact gates passed for ", architecture])
+
+checkBundle = \directory architecture -> do
+  let files =
+        if Eq.eq architecture "x86_64"
+          then [Main.x86Archive, Main.x86Spdx, Main.x86Fragment]
+          else [Main.armArchive, Main.armSpdx, Main.armFragment]
+  let archiveName = if Eq.eq architecture "x86_64" then Main.x86Archive else Main.armArchive
+  let spdxName = if Eq.eq architecture "x86_64" then Main.x86Spdx else Main.armSpdx
+  let fragmentName = if Eq.eq architecture "x86_64" then Main.x86Fragment else Main.armFragment
+  let root =
+        if Eq.eq architecture "x86_64"
+          then "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static"
+          else "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static"
+  Main.exactFiles directory files
+  let archive = Main.joinPath directory archiveName
+  let spdxPath = Main.joinPath directory spdxName
+  fragment <- Main.jsonFile (Main.joinPath directory fragmentName)
+  Main.require
+    (Eq.eq (Main.jsonString (Main.jsonObjectField "repository" fragment)) Main.fixedRepository)
+    "bundle fragment repository mismatch"
+  Main.require
+    (Eq.eq (Main.jsonString (Main.jsonObjectField "tag" fragment)) Main.fixedTag)
+    "bundle fragment tag mismatch"
+  let target = Main.jsonObjectField "target" fragment
+  Main.require
+    (Eq.eq (Main.jsonString (Main.jsonObjectField "arch" target)) architecture)
+    "bundle fragment architecture mismatch"
+  expectedCommit <- Main.envDefault "GITHUB_SHA"
+    (Main.jsonString (Main.jsonObjectField "commit" fragment))
+  Main.require (Main.lowerHex Main.fullCommitWidth expectedCommit) "bundle commit is not lowercase full hex"
+  Main.require
+    (Eq.eq (Main.jsonString (Main.jsonObjectField "commit" fragment)) expectedCommit)
+    "bundle fragment commit mismatch"
+  shaTool <- Main.envDefault "HELL_TOOL_SHA256SUM" "sha256sum"
+  statTool <- Main.envDefault "HELL_TOOL_STAT" "stat"
+  archiveDigest <- Main.digest shaTool archive
+  archiveSize <- Main.sizeNumber statTool archive
+  spdxDigest <- Main.digest shaTool spdxPath
+  spdxSize <- Main.sizeNumber statTool spdxPath
+  let archiveMetadata = Main.jsonObjectField "archive" fragment
+  let spdxMetadata = Main.jsonObjectField "sbom" fragment
+  Main.require
+    (List.and
+      [ Eq.eq (Main.jsonString (Main.jsonObjectField "name" archiveMetadata)) archiveName,
+        Eq.eq (Main.jsonString (Main.jsonObjectField "sha256" archiveMetadata)) archiveDigest,
+        Eq.eq (Main.jsonNumber (Main.jsonObjectField "size" archiveMetadata)) archiveSize,
+        Eq.eq (Main.jsonString (Main.jsonObjectField "name" spdxMetadata)) spdxName,
+        Eq.eq (Main.jsonString (Main.jsonObjectField "sha256" spdxMetadata)) spdxDigest,
+        Eq.eq (Main.jsonNumber (Main.jsonObjectField "size" spdxMetadata)) spdxSize
+      ])
+    "bundle fragment bytes do not match archive/SBOM"
+  listing <- Main.capture "tar" ["--list", "--file", archive]
+  Main.require
+    (Eq.eq (List.sort (Text.lines listing))
+      (List.sort
+        [ Main.directoryMember root,
+          Main.joinPath root "hell",
+          Main.joinPath root "README.md",
+          Main.joinPath root "LICENSE"
+        ]))
+    "archive members differ from the exact reviewed contract"
+  verbose <- Main.capture "tar" ["--list", "--verbose", "--numeric-owner", "--file", archive]
+  Monad.forM_ (Text.lines verbose) \line ->
+    do
+      Main.require (Text.isInfixOf " 0/0 " line) "archive member ownership is not numeric 0/0"
+      if Text.isSuffixOf "/hell" line
+        then Main.require (Text.isPrefixOf "-rwxr-xr-x" line) "archive Hell mode must be 0755"
+        else if Text.isSuffixOf "/" line
+          then Main.require (Text.isPrefixOf "drwxr-xr-x" line) "archive root mode must be 0755"
+          else Main.require (Text.isPrefixOf "-rw-r--r--" line) "archive document mode must be 0644"
+  Main.run "check-jsonschema"
+    ["--schemafile", "release/spdx-2.3.schema.json", Main.joinPath directory spdxName]
+  Main.run "pyspdxtools"
+    ["--infile", Main.joinPath directory spdxName, "--version", "SPDX-2.3"]
+  Temp.withSystemTempDirectory "hell-bundle" \temporary -> do
+    Main.run "tar"
+      ["--extract", "--file", archive, "--directory", temporary,
+       "--no-same-owner", "--no-same-permissions"]
+    let extracted = Main.joinPath temporary root
+    Main.exactFiles extracted ["hell", "README.md", "LICENSE"]
+    Main.checkRuntime (Main.joinPath extracted "hell") architecture
+  Text.putStrLn (Text.concat ["release bundle checks passed for ", architecture])
+
+nixRelease = do
+  output <- Main.env "out"
+  binary <- Main.envAlias "releaseBinary" "HELL_STATIC_BINARY"
+  architecture <- Main.envAlias "releaseArch" "HELL_TARGET_ARCH"
+  source <- Main.envAlias "SOURCE_ROOT" "sourceRoot"
+  installTool <- Main.envDefault "HELL_TOOL_INSTALL" "install"
+  tarTool <- Main.envDefault "HELL_TOOL_TAR" "tar"
+  xzTool <- Main.envDefault "HELL_TOOL_XZ" "xz"
+  sha1Tool <- Main.envDefault "HELL_TOOL_SHA1SUM" "sha1sum"
+  sha256Tool <- Main.envDefault "HELL_TOOL_SHA256SUM" "sha256sum"
+  statTool <- Main.envDefault "HELL_TOOL_STAT" "stat"
+  revision <- Main.env "SOURCE_REVISION"
+  tarMtime <- Main.env "TAR_MTIME"
+  nixSystem <- Main.env "NIX_SYSTEM"
+  nixVersion <- Main.env "NIX_VERSION"
+  ghcVersion <- Main.env "GHC_VERSION"
+  lockDigest <- Main.env "FLAKE_LOCK_SHA256"
+  componentPath <- Main.env "COMPONENTS_JSON"
+  inputsPath <- Main.env "FLAKE_INPUTS_JSON"
+  base <-
+    if Eq.eq architecture "x86_64"
+      then IO.pure "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static"
+      else
+        if Eq.eq architecture "aarch64"
+          then IO.pure "hell-application-image-compilation-1.0.0-hell-2026-05-29-aarch64-linux-static"
+          else Main.die "unsupported Nix release architecture"
+  Directory.createDirectory output
+  let root = Main.joinPath output base
+  Directory.createDirectory root
+  Main.run installTool ["-m", "0755", binary, Main.joinPath root "hell"]
+  Main.run installTool ["-m", "0644", Main.joinPath source "README.md", Main.joinPath root "README.md"]
+  Main.run installTool ["-m", "0644", Main.joinPath source "LICENSE", Main.joinPath root "LICENSE"]
+  let tarPath = Main.joinPath output (Main.addExtension base ".tar")
+  let archive = Main.joinPath output (Main.addExtension base ".tar.xz")
+  Main.run tarTool
+    ["--sort=name", "--format=ustar", "--owner=0", "--group=0", "--numeric-owner",
+     "--mtime", tarMtime, "--create", "--file", tarPath, "--directory", output, base]
+  archiveHandle <- IO.openFile archive IO.WriteMode
+  Process.runProcess_
+    (Process.setStdout
+      (Process.useHandleClose archiveHandle)
+      (Process.proc xzTool ["--threads=1", "--check=crc64", "-9e", "--stdout", tarPath]))
+  Directory.removeFile tarPath
+  binarySha1 <- Main.digest sha1Tool (Main.joinPath root "hell")
+  binarySha256 <- Main.digest sha256Tool (Main.joinPath root "hell")
+  readmeSha1 <- Main.digest sha1Tool (Main.joinPath root "README.md")
+  readmeSha256 <- Main.digest sha256Tool (Main.joinPath root "README.md")
+  licenseSha1 <- Main.digest sha1Tool (Main.joinPath root "LICENSE")
+  licenseSha256 <- Main.digest sha256Tool (Main.joinPath root "LICENSE")
+  let spdxName = Main.addExtension base ".spdx.json"
+  let spdxPath = Main.joinPath output spdxName
+  let checksum = \algorithm value ->
+        Json.Object (Map.fromList [("algorithm", Json.String algorithm), ("checksumValue", Json.String value)])
+  let file = \name identifier sha1 sha256 kind copyright ->
+        Json.Object (Map.fromList
+          [ ("fileName", Json.String name),
+            ("SPDXID", Json.String identifier),
+            ("checksums", Json.Array (Vector.fromList [checksum "SHA1" sha1, checksum "SHA256" sha256])),
+            ("fileTypes", Json.Array (Vector.fromList [Json.String kind])),
+            ("licenseConcluded", Json.String "BSD-3-Clause"),
+            ("copyrightText", Json.String copyright)
+          ])
+  let package = Json.Object (Map.fromList
+        [ ("name", Json.String "hell-application-image-compilation"),
+          ("SPDXID", Json.String "SPDXRef-Package"),
+          ("versionInfo", Json.String "1.0.0"),
+          ("downloadLocation", Json.String "NOASSERTION"),
+          ("filesAnalyzed", Json.Bool Bool.True),
+          ("licenseConcluded", Json.String "BSD-3-Clause"),
+          ("licenseDeclared", Json.String "BSD-3-Clause"),
+          ("copyrightText", Json.String "Copyright (c) 2023, Chris Done")
+        ])
+  let relation = \related ->
+        Json.Object (Map.fromList
+          [ ("spdxElementId", Json.String "SPDXRef-Package"),
+            ("relationshipType", Json.String "CONTAINS"),
+            ("relatedSpdxElement", Json.String related)
+          ])
+  components <- Main.jsonFile componentPath
+  let componentValues =
+        Json.value
+          []
+          (\_ -> [])
+          (\_ -> [])
+          (\_ -> [])
+          Vector.toList
+          (\_ -> [])
+          components
+  let componentId = \value ->
+        Text.concat ["SPDXRef-Dependency-", Main.jsonString (Main.jsonObjectField "name" value)]
+  let componentPackage = \value ->
+        Json.Object (Map.fromList
+          [ ("name", Main.jsonObjectField "name" value),
+            ("SPDXID", Json.String (componentId value)),
+            ("versionInfo", Main.jsonObjectField "version" value),
+            ("downloadLocation", Json.String "NOASSERTION"),
+            ("filesAnalyzed", Json.Bool Bool.False),
+            ("licenseConcluded", Json.String "NOASSERTION"),
+            ("licenseDeclared", Json.String "NOASSERTION"),
+            ("copyrightText", Json.String "NOASSERTION"),
+            ("comment", Main.jsonObjectField "storePath" value)
+          ])
+  let dependencyRelation = \value ->
+        Json.Object (Map.fromList
+          [ ("spdxElementId", Json.String "SPDXRef-Package"),
+            ("relationshipType", Json.String "DEPENDS_ON"),
+            ("relatedSpdxElement", Json.String (componentId value))
+          ])
+  ByteString.writeFile spdxPath (Json.encode (Json.Object (Map.fromList
+    [ ("spdxVersion", Json.String "SPDX-2.3"),
+      ("dataLicense", Json.String "CC0-1.0"),
+      ("SPDXID", Json.String "SPDXRef-DOCUMENT"),
+      ("name", Json.String base),
+      ("documentNamespace", Json.String "https://github.com/Portfoligno/hell-application-image-compilation/spdx/application-image-compilation-v1.0.0"),
+      ("creationInfo", Json.Object (Map.fromList
+        [("created", Json.String "1970-01-01T00:00:00Z"),
+         ("creators", Json.Array (Vector.fromList [Json.String "Tool: hell-automation-1"]))])),
+      ("documentDescribes", Json.Array (Vector.fromList [Json.String "SPDXRef-Package"])),
+      ("packages", Json.Array (Vector.fromList ([package] <> List.map componentPackage componentValues))),
+      ("files", Json.Array (Vector.fromList
+        [ file "hell" "SPDXRef-File-hell" binarySha1 binarySha256 "BINARY" "Copyright (c) 2023, Chris Done",
+          file "README.md" "SPDXRef-File-README" readmeSha1 readmeSha256 "TEXT" "NOASSERTION",
+          file "LICENSE" "SPDXRef-File-LICENSE" licenseSha1 licenseSha256 "TEXT" "Copyright (c) 2023, Chris Done"
+        ])),
+      ("relationships", Json.Array (Vector.fromList
+        ([relation "SPDXRef-File-hell", relation "SPDXRef-File-README", relation "SPDXRef-File-LICENSE"]
+         <> List.map dependencyRelation componentValues)))
+    ])))
+  archiveSha <- Main.digest sha256Tool archive
+  archiveSize <- Main.sizeNumber statTool archive
+  spdxSha <- Main.digest sha256Tool spdxPath
+  spdxSize <- Main.sizeNumber statTool spdxPath
+  infoText <- Main.capture binary ["--build-info=json"]
+  info <- Maybe.maybe (Main.die "runtime build info is invalid JSON") IO.pure (Json.decode (Text.encodeUtf8 infoText))
+  let buildIdentity = Main.jsonString (Main.jsonObjectField "buildIdentity" info)
+  inputs <- Main.jsonFile inputsPath
+  let asset = \name digest size ->
+        Json.Object (Map.fromList
+          [("name", Json.String name), ("sha256", Json.String digest), ("size", Json.Number size)])
+  let fragmentName = Main.addExtension base ".fragment.json"
+  ByteString.writeFile (Main.joinPath output fragmentName) (Json.encode (Json.Object (Map.fromList
+    [ ("schemaVersion", Json.Number 1.0),
+      ("repository", Json.String Main.fixedRepository),
+      ("commit", Json.String revision),
+      ("tag", Json.String Main.fixedTag),
+      ("release", Json.Object (Map.fromList
+        [("feature", Json.String "Application Image Compilation"),
+         ("version", Json.String "1.0.0"),
+         ("package", Json.String "hell-application-image-compilation")])),
+      ("upstreamRuntime", Json.Object (Map.fromList
+        [("name", Json.String "Hell"), ("version", Json.String "2026-05-29")])),
+      ("imageCompatibility", Json.Object (Map.fromList
+        [("formatVersion", Json.Number 2.0), ("abiVersion", Json.Number 2.0),
+         ("compatibilityFingerprint", Json.String "c0b499f996de5437")])),
+      ("buildIdentity", Json.String buildIdentity),
+      ("target", Json.Object (Map.fromList
+        [("os", Json.String "linux"), ("arch", Json.String architecture),
+         ("nixSystem", Json.String nixSystem), ("linkage", Json.String "static")])),
+      ("toolchain", Json.Object (Map.fromList
+        [("ghcVersion", Json.String ghcVersion), ("nixVersion", Json.String nixVersion),
+         ("flakeLockSha256", Json.String lockDigest), ("flakeInputs", inputs),
+         ("componentInventoryScope", Json.String "complete-direct-cabal-dependencies-and-linked-native-components"),
+         ("components", components)])),
+      ("archive", asset (Main.addExtension base ".tar.xz") archiveSha archiveSize),
+      ("sbom", Json.Object (Map.fromList
+        [("name", Json.String spdxName), ("sha256", Json.String spdxSha),
+         ("size", Json.Number spdxSize), ("format", Json.String "SPDX-2.3")]))
+    ])))
+  Directory.removeFile (Main.joinPath root "hell")
+  Directory.removeFile (Main.joinPath root "README.md")
+  Directory.removeFile (Main.joinPath root "LICENSE")
+  Directory.removeDirectory root
+  Main.checkRuntime binary architecture
+
+main = do
+  arguments <- Environment.getArgs
+  let count = List.length arguments
+  let command = Main.argument 0 arguments
+  if Eq.eq command "check-runtime"
+    then do
+      Main.require (List.elem count [2,3])
+        "check-runtime requires binary and optional architecture"
+      architecture <-
+        if Eq.eq count 3
+          then IO.pure (Main.argument 2 arguments)
+          else Main.env "HELL_TARGET_ARCH"
+      Main.checkRuntime (Main.argument 1 arguments) architecture
+  else if Eq.eq command "check-bundle"
+    then do
+      Main.require (List.elem count [2,3])
+        "check-bundle requires directory and optional architecture"
+      architecture <-
+        if Eq.eq count 3
+          then IO.pure (Main.argument 2 arguments)
+          else Main.env "HELL_TARGET_ARCH"
+      Main.checkBundle (Main.argument 1 arguments) architecture
+  else if Eq.eq command "nix-release" then Main.nixRelease
+  else Main.die "usage: hell-automation release-build command"

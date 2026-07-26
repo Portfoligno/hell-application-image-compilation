@@ -33,7 +33,11 @@
         };
 
         mkApp = packageSet:
-          packageSet.haskellPackages.callCabal2nix releasePackage ./. {};
+          (packageSet.haskellPackages.callCabal2nix releasePackage ./. {}).overrideAttrs
+            (_old: {
+              allowSubstitutes = false;
+              preferLocalBuild = true;
+            });
         app = mkApp pkgs;
         staticArm64 = mkApp pkgsStaticArm64;
         staticAmd64 = mkApp pkgsStaticAmd64;
@@ -80,17 +84,31 @@
           "wai"
           "warp"
         ];
+        sdistCompiler =
+          pkgs.haskellPackages.ghcWithPackages
+            (packages:
+              map
+                (name: builtins.getAttr name packages)
+                haskellDependencyNames);
         component = kind: name: drv: {
           inherit kind name;
           version = drv.version or "NOASSERTION";
           storePath = "${drv}";
         };
+        ghcBootLibraryComponent = name: {
+          kind = "ghc-boot-library";
+          inherit name;
+          version = "NOASSERTION";
+          storePath = "${staticNativePackages.haskellPackages.ghc}";
+        };
         haskellComponents = map
           (name:
-            component
-              "direct-cabal-dependency"
-              name
-              (builtins.getAttr name staticNativePackages.haskellPackages))
+            let
+              drv = builtins.getAttr name staticNativePackages.haskellPackages;
+            in
+              if drv == null
+              then ghcBootLibraryComponent name
+              else component "direct-cabal-dependency" name drv)
           haskellDependencyNames;
         nativeComponents = [
           (component "linked-component" "musl" staticNativePackages.stdenv.cc.libc)
@@ -112,7 +130,7 @@
           builtins.derivation {
             inherit system;
             name = "${name}-${system}";
-            builder = "${app}/bin/hell";
+            builder = pkgs.lib.getExe' app "hell";
             args = [
               "--compile"
               source
@@ -121,47 +139,178 @@
             ];
           };
 
+        hellAutomationChecks =
+          mkHellImage
+            "hell-automation-checks"
+            ./automation/hell-automation-checks.hell;
+        hellAutomationReleaseBuild =
+          mkHellImage
+            "hell-automation-release-build"
+            ./automation/hell-automation-release-build.hell;
+        hellAutomationReleaseControlSource =
+          pkgs.replaceVars ./automation/hell-automation-release-control.hell {
+            releaseBuildImage = hellAutomationReleaseBuild;
+          };
+        hellAutomationReleaseControl =
+          mkHellImage
+            "hell-automation-release-control"
+            hellAutomationReleaseControlSource;
+        hellAutomationDispatcherSource =
+          pkgs.replaceVars ./automation/hell-automation.hell {
+            checksImage = hellAutomationChecks;
+            releaseBuildImage = hellAutomationReleaseBuild;
+            releaseControlImage = hellAutomationReleaseControl;
+          };
         hellAutomation =
-          mkHellImage "hell-automation" ./automation/hell-automation.hell;
+          mkHellImage "hell-automation" hellAutomationDispatcherSource;
         hellAutomationTests =
           mkHellImage "hell-automation-tests" ./automation/hell-automation-tests.hell;
 
-        mkAutomationCheck = name: mode:
-          builtins.derivation {
+        staticHaskellCacheRoots =
+          pkgs.lib.imap0
+            (index: name:
+              let
+                dependency =
+                  builtins.getAttr name staticNativePackages.haskellPackages;
+              in {
+                name = "haskell-${toString index}-${name}";
+                path =
+                  if dependency == null
+                  then staticNativePackages.haskellPackages.ghc
+                  else dependency;
+              })
+            haskellDependencyNames;
+        staticCompilerCacheRoots = [
+          {
+            name = "toolchain-ghc";
+            path = staticNativePackages.haskellPackages.ghc;
+          }
+        ];
+        staticCRuntimeCacheRoots = [
+          {
+            name = "toolchain-cc";
+            path = staticNativePackages.stdenv.cc;
+          }
+          {
+            name = "toolchain-binutils";
+            path = staticNativePackages.stdenv.cc.bintools;
+          }
+          {
+            name = "toolchain-musl";
+            path = staticNativePackages.stdenv.cc.libc;
+          }
+          {
+            name = "toolchain-libffi";
+            path = staticNativePackages.libffi;
+          }
+          {
+            name = "toolchain-zlib";
+            path = staticNativePackages.zlib;
+          }
+        ] ++ pkgs.lib.optional
+          (staticNativePackages.gmp != null)
+          {
+            name = "toolchain-gmp";
+            path = staticNativePackages.gmp;
+          };
+        staticToolchainCacheRoots =
+          staticCompilerCacheRoots ++ staticCRuntimeCacheRoots;
+        automationCacheRoots = [
+          {
+            name = "automation-dispatcher";
+            path = hellAutomation;
+          }
+          {
+            name = "automation-checks";
+            path = hellAutomationChecks;
+          }
+          {
+            name = "automation-release-build";
+            path = hellAutomationReleaseBuild;
+          }
+          {
+            name = "automation-release-control";
+            path = hellAutomationReleaseControl;
+          }
+          {
+            name = "automation-tests";
+            path = hellAutomationTests;
+          }
+        ];
+        staticHaskellCacheSeed =
+          pkgs.linkFarm
+            "hell-ci-cache-static-haskell-v1-${system}"
+            staticHaskellCacheRoots;
+        staticToolchainCacheSeed =
+          pkgs.linkFarm
+            "hell-ci-cache-static-toolchain-v1-${system}"
+            staticToolchainCacheRoots;
+        staticCompilerCacheSeed =
+          pkgs.linkFarm
+            "hell-ci-cache-static-compiler-v2-${system}"
+            staticCompilerCacheRoots;
+        staticCRuntimeCacheSeed =
+          pkgs.linkFarm
+            "hell-ci-cache-static-c-runtime-v2-${system}"
+            staticCRuntimeCacheRoots;
+        automationCacheSeed =
+          pkgs.linkFarm
+            "hell-ci-cache-automation-v2-${system}"
+            automationCacheRoots;
+
+        mkAutomationCheck = name: mode: image:
+          builtins.derivation ({
             inherit system;
             name = "hell-${name}-${system}";
-            builder = hellAutomation;
+            allowSubstitutes = false;
+            preferLocalBuild = true;
+            builder = image;
             args = [ "nix-check" ];
             HELL_CHECK_MODE = mode;
             HELL_AUTOMATION_TESTS = hellAutomationTests;
             HELL_AUTOMATION = hellAutomation;
-            HELL_PRODUCT_BINARY = "${app}/bin/hell";
-            HELL_STATIC_BINARY = "${staticNative}/bin/hell";
+            HELL_AUTOMATION_RELEASE_CONTROL_IMAGE = hellAutomationReleaseControl;
+            HELL_PRODUCT_BINARY = pkgs.lib.getExe' app "hell";
             HELL_TARGET_ARCH = releaseArch;
             SOURCE_ROOT = ./.;
             HELL_VERSIONS_FILE = ./release/versions.json;
-            HELL_TOOL_FIND = "${pkgs.findutils}/bin/find";
-            HELL_TOOL_GIT = "${pkgs.git}/bin/git";
-            HELL_TOOL_STAT = "${pkgs.coreutils}/bin/stat";
-            HELL_TOOL_CHMOD = "${pkgs.coreutils}/bin/chmod";
+            HELL_TOOL_FIND = pkgs.lib.getExe' pkgs.findutils "find";
+            HELL_TOOL_GIT = pkgs.lib.getExe' pkgs.git "git";
+            HELL_TOOL_STAT = pkgs.lib.getExe' pkgs.coreutils "stat";
+            HELL_TOOL_CHMOD = pkgs.lib.getExe' pkgs.coreutils "chmod";
             PATH = pkgs.lib.makeBinPath [
               app
               pkgs.cabal-install
               pkgs.coreutils
               pkgs.git
+              pkgs.gzip
               pkgs.gnutar
               pkgs.haskellPackages.hpack
               pkgs.pandoc
             ];
-          };
+          } // pkgs.lib.optionalAttrs (mode == "hpack-drift") {
+            HELL_TOOL_HPACK = pkgs.lib.getExe' pkgs.haskellPackages.hpack "hpack";
+            HELL_TOOL_CP = pkgs.lib.getExe' pkgs.coreutils "cp";
+          } // pkgs.lib.optionalAttrs (mode == "check-docs") {
+            HELL_TOOL_CABAL = pkgs.lib.getExe' pkgs.cabal-install "cabal";
+            HELL_TOOL_GHC = pkgs.lib.getExe' sdistCompiler "ghc";
+          } // pkgs.lib.optionalAttrs (mode == "check-sdist") {
+            HOME = "/homeless-shelter";
+            HELL_TOOL_CABAL = pkgs.lib.getExe' pkgs.cabal-install "cabal";
+            HELL_TOOL_GHC = pkgs.lib.getExe' sdistCompiler "ghc";
+            HELL_TOOL_TIMEOUT = pkgs.lib.getExe' pkgs.coreutils "timeout";
+            HELL_TOOL_TAR = pkgs.lib.getExe' pkgs.gnutar "tar";
+          });
 
         releaseStaticNative =
           builtins.derivation {
             inherit system;
             name = "${releasePackage}-${releaseVersion}-${releaseArch}-release";
-            builder = hellAutomation;
+            allowSubstitutes = false;
+            preferLocalBuild = true;
+            builder = hellAutomationReleaseBuild;
             args = [ "nix-release" ];
-            HELL_STATIC_BINARY = "${staticNative}/bin/hell";
+            HELL_STATIC_BINARY = pkgs.lib.getExe' staticNative "hell";
             HELL_TARGET_ARCH = releaseArch;
             SOURCE_ROOT = ./.;
             HELL_VERSIONS_FILE = ./release/versions.json;
@@ -169,25 +318,25 @@
             HELL_SPDX_SCHEMA = ./release/spdx-2.3.schema.json;
             SOURCE_REVISION = sourceRevision;
             SOURCE_DATE_EPOCH = sourceDateEpoch;
-            TAR_MTIME_ARGUMENT = "--mtime=@${sourceDateEpoch}";
+            TAR_MTIME = "@1";
             FLAKE_LOCK_SHA256 = lockSha256;
             NIX_SYSTEM = system;
             NIX_VERSION = builtins.nixVersion;
             GHC_VERSION = staticNativePackages.haskellPackages.ghc.version;
             COMPONENTS_JSON = componentsFile;
             FLAKE_INPUTS_JSON = flakeInputsFile;
-            HELL_TOOL_FILE = "${pkgs.file}/bin/file";
-            HELL_TOOL_READELF = "${pkgs.binutils}/bin/readelf";
-            HELL_TOOL_CP = "${pkgs.coreutils}/bin/cp";
-            HELL_TOOL_TRUNCATE = "${pkgs.coreutils}/bin/truncate";
-            HELL_TOOL_TIMEOUT = "${pkgs.coreutils}/bin/timeout";
-            HELL_TOOL_CHMOD = "${pkgs.coreutils}/bin/chmod";
-            HELL_TOOL_INSTALL = "${pkgs.coreutils}/bin/install";
-            HELL_TOOL_SHA1SUM = "${pkgs.coreutils}/bin/sha1sum";
-            HELL_TOOL_SHA256SUM = "${pkgs.coreutils}/bin/sha256sum";
-            HELL_TOOL_STAT = "${pkgs.coreutils}/bin/stat";
-            HELL_TOOL_TAR = "${pkgs.gnutar}/bin/tar";
-            HELL_TOOL_XZ = "${pkgs.xz}/bin/xz";
+            HELL_TOOL_FILE = pkgs.lib.getExe' pkgs.file "file";
+            HELL_TOOL_READELF = pkgs.lib.getExe' pkgs.binutils "readelf";
+            HELL_TOOL_CP = pkgs.lib.getExe' pkgs.coreutils "cp";
+            HELL_TOOL_TRUNCATE = pkgs.lib.getExe' pkgs.coreutils "truncate";
+            HELL_TOOL_TIMEOUT = pkgs.lib.getExe' pkgs.coreutils "timeout";
+            HELL_TOOL_CHMOD = pkgs.lib.getExe' pkgs.coreutils "chmod";
+            HELL_TOOL_INSTALL = pkgs.lib.getExe' pkgs.coreutils "install";
+            HELL_TOOL_SHA1SUM = pkgs.lib.getExe' pkgs.coreutils "sha1sum";
+            HELL_TOOL_SHA256SUM = pkgs.lib.getExe' pkgs.coreutils "sha256sum";
+            HELL_TOOL_STAT = pkgs.lib.getExe' pkgs.coreutils "stat";
+            HELL_TOOL_TAR = pkgs.lib.getExe' pkgs.gnutar "tar";
+            HELL_TOOL_XZ = pkgs.lib.getExe' pkgs.xz "xz";
           };
       in {
         devShells.default = pkgs.haskellPackages.shellFor {
@@ -206,10 +355,16 @@
         };
 
         checks = {
-          automation = mkAutomationCheck "automation" "policy";
-          metadata = mkAutomationCheck "metadata" "metadata";
-          documentation = mkAutomationCheck "documentation" "check-docs";
-          source-distribution = mkAutomationCheck "source-distribution" "check-sdist";
+          automation =
+            mkAutomationCheck "automation" "policy" hellAutomationChecks;
+          metadata =
+            mkAutomationCheck "metadata" "metadata" hellAutomationChecks;
+          hpack-drift =
+            mkAutomationCheck "hpack-drift" "hpack-drift" hellAutomationChecks;
+          documentation =
+            mkAutomationCheck "documentation" "check-docs" hellAutomationChecks;
+          source-distribution =
+            mkAutomationCheck "source-distribution" "check-sdist" hellAutomationChecks;
           release-static-native = releaseStaticNative;
           build = pkgs.haskell.lib.doCheck app;
         };
@@ -217,7 +372,16 @@
         packages = {
           default = app;
           automation = hellAutomation;
+          automation-checks = hellAutomationChecks;
+          automation-release-build = hellAutomationReleaseBuild;
+          automation-release-control = hellAutomationReleaseControl;
           automation-tests = hellAutomationTests;
+          cache-client = pkgs.cachix;
+          cache-seed-automation = automationCacheSeed;
+          cache-seed-static-c-runtime = staticCRuntimeCacheSeed;
+          cache-seed-static-compiler = staticCompilerCacheSeed;
+          cache-seed-static-haskell = staticHaskellCacheSeed;
+          cache-seed-static-toolchain = staticToolchainCacheSeed;
           static-arm64 = staticArm64;
           static-amd64 = staticAmd64;
           static-native = staticNative;
@@ -231,7 +395,7 @@
           };
           default = {
             type = "app";
-            program = "${app}/bin/hell";
+            program = pkgs.lib.getExe' app "hell";
           };
         };
       }

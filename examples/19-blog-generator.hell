@@ -10,6 +10,12 @@
 --
 main = Main.generate
 
+joinPath = \parent child ->
+  Maybe.maybe
+    (Text.concat [parent, "/", child])
+    (\without -> Text.concat [without, "/", child])
+    (Text.stripSuffix "/" parent)
+
 -- The posts are listed under ./posts in this format:
 --
 -- dijkstra-haskell-java.markdown
@@ -30,7 +36,7 @@ generatePosts = do
   posts <- Directory.listDirectory "posts"
   Text.putStrLn $ Text.concat ["Generating ", Show.show (List.length posts), " posts ..."]
   Async.pooledForConcurrently posts \post -> do
-    contents <- Text.readFile $ Text.concat ["posts/", post]
+    contents <- Text.readFile $ Main.joinPath "posts" post
     Maybe.maybe
       (Error.error "Couldn't parse the article!")
       (\(date, title) -> do
@@ -70,7 +76,7 @@ generateArchive = \posts -> do
     Text.readProcess_
       $ Text.setStdin table
       $ Process.proc "pandoc" ["--standalone","--template","templates/posts.html"]
-  Text.writeFile "webroot/posts/index.html" out
+  Text.writeFile (Main.joinPath (Main.joinPath "webroot" "posts") "index.html") out
 
 -- Contents of an article looks like this:
 --
@@ -90,7 +96,10 @@ parse = \article -> do
   let (preamble, _content) = Text.breakOn "---" sansPrefix
   let lines = Text.splitOn "\n" preamble
   let pairs = List.map (\line -> do let (key, value) = Text.breakOn ":" line
-                                    (key, Text.strip (Text.drop 1 value)))
+                                    let sansSeparator =
+                                          Maybe.maybe value Function.id
+                                            (Text.stripPrefix ":" value)
+                                    (key, Text.strip sansSeparator))
                        lines
   date <- List.lookup "date" pairs
   title <- List.lookup "title" pairs
@@ -101,9 +110,12 @@ parse = \article -> do
 -- Rendering them is easy, just run pandoc and apply an HTML template.
 render = \post -> do
   let targetDir =
-        Text.concat ["webroot/posts/", Main.filename post]
-  let targetFile = Text.concat [targetDir, "/index.html"]
-  (out, err) <- Text.readProcess_ (Process.proc "pandoc" ["--standalone","--template","templates/post.html",Text.concat ["posts/", post]])
+        Main.joinPath (Main.joinPath "webroot" "posts") (Main.filename post)
+  let targetFile = Main.joinPath targetDir "index.html"
+  (out, err) <- Text.readProcess_
+    (Process.proc
+      "pandoc"
+      ["--standalone","--template","templates/post.html",Main.joinPath "posts" post])
   Directory.createDirectoryIfMissing Bool.True targetDir
   Text.writeFile targetFile out
   Monad.return out
