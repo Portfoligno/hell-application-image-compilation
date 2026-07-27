@@ -68,14 +68,19 @@ all of these gates pass on the exact commit to be tagged:
 11. Package every binary with `LICENSE`, record the tag and commit, generate
     SHA-256 checksums, and verify the archives after extraction.
 12. Push the release-preparation commit, wait for required checks to pass, and
-    create an annotated tag at that exact public commit.
+    create an annotated tag at that exact public commit. Candidate tag CI
+    requires the peeled tag target to equal the event commit and requires the
+    target and current `origin/main` to be on one linear history; diverged or
+    unrelated targets are rejected.
 13. Let tag CI create or verify the exact draft and its attestations. The
     workflow must stop while the release remains a draft.
 14. Review the fork-specific notes, exact six assets, checksums, SBOMs,
-    attestations, and tagged documentation. In the Releases page, explicitly
-    select **Set as latest release**, then use **Publish release**. This
-    first reviewed release is intended to be latest; do not let GitHub infer
-    that status from the composite tag.
+    attestations, and tagged documentation. Before publication, merge the exact
+    tagged commit into protected `main` without moving the tag, wait for its
+    required checks, and confirm the tag target is contained in `origin/main`.
+    In the Releases page, explicitly select **Set as latest release**, then use
+    **Publish release**. This first reviewed release is intended to be latest;
+    do not let GitHub infer that status from the composite tag.
 15. After publication, confirm the release displays GitHub's **Latest** badge
     and require the separate read-only publication-verification workflow to
     pass.

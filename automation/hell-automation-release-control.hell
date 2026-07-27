@@ -33,6 +33,16 @@ capture = \executable arguments -> do
     then IO.pure out
     else Main.die (Text.concat ["child failed: ", executable, "\n", err])
 
+gitAncestor = \gitTool ancestor descendant -> do
+  (code, _out, _err) <-
+    Text.readProcess
+      (Process.proc
+        gitTool
+        ["merge-base", "--is-ancestor", ancestor, descendant])
+  IO.pure (Eq.eq code Exit.ExitSuccess)
+
+publishedReleaseHistoryValid = \tagInMain -> tagInMain
+
 captureIn = \directory executable arguments -> do
   (code, out, err) <-
     Text.readProcess
@@ -359,13 +369,18 @@ stageDraft = \directory -> do
 
 verifyPublished = \directory -> do
   ghTool <- Main.envDefault "HELL_TOOL_GH" "gh"
+  gitTool <- Main.envDefault "HELL_TOOL_GIT" "git"
+  expectedCommit <- Main.env "GITHUB_SHA"
+  tagInMain <- Main.gitAncestor gitTool expectedCommit "origin/main"
+  Main.require
+    (Main.publishedReleaseHistoryValid tagInMain)
+    "published tag commit is not contained in origin/main"
   Directory.createDirectoryIfMissing Bool.True directory
   viewText <- Main.capture ghTool
     ["release", "view", Main.fixedTag, "--repo", Main.fixedRepository,
      "--json", "isDraft,tagName,name,targetCommitish"]
   view <- Maybe.maybe (Main.die "published release metadata is invalid JSON") IO.pure
     (Json.decode (Text.encodeUtf8 viewText))
-  expectedCommit <- Main.env "GITHUB_SHA"
   Main.require (Bool.not (Main.jsonBool (Main.jsonObjectField "isDraft" view))) "release is still a draft"
   Main.require (Eq.eq (Main.jsonString (Main.jsonObjectField "tagName" view)) Main.fixedTag) "published release tag differs"
   Main.require (Eq.eq (Main.jsonString (Main.jsonObjectField "name" view)) Main.fixedVersion) "published release title differs"

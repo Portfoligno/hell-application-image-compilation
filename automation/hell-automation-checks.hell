@@ -52,11 +52,40 @@ capture = \executable arguments -> do
     then IO.pure out
     else Main.die (Text.concat ["child failed: ", executable, "\n", err])
 
+gitAncestor = \gitTool ancestor descendant -> do
+  (code, _out, _err) <-
+    Text.readProcess
+      (Process.proc
+        gitTool
+        ["merge-base", "--is-ancestor", ancestor, descendant])
+  IO.pure (Eq.eq code Exit.ExitSuccess)
+
 require = \condition message ->
   if condition then IO.pure () else Main.die message
 
 requireText = \needle haystack message ->
   Main.require (Text.isInfixOf needle haystack) message
+
+lowerHex = \width value ->
+  List.and
+    [ Eq.eq (Text.length value) width,
+      Text.all
+        (\character -> List.elem character
+          ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'])
+        value
+    ]
+
+tagCommitIdentityValid = \targetCommit eventCommit ->
+  List.and
+    [ Main.lowerHex Main.fullCommitWidth targetCommit,
+      Main.lowerHex Main.fullCommitWidth eventCommit,
+      Eq.eq targetCommit eventCommit
+    ]
+
+releaseCandidateHistoryValid = \tagInMain mainInTag ->
+  List.or [tagInMain, mainInTag]
+
+publishedReleaseHistoryValid = \tagInMain -> tagInMain
 
 env = \name -> do
   values <- Environment.getEnvironment
@@ -261,6 +290,53 @@ releaseValidatorCallSitesValid = \releaseBuild releaseControl ->
       Eq.eq
         (List.length (Text.splitOn "Main.run pyspdxtoolsTool" releaseControl))
         3
+    ]
+
+releaseCandidateTrustPolicyValid = \checks ->
+  List.and
+    [ Text.isInfixOf
+        "gitTool\n        [\"merge-base\", \"--is-ancestor\", ancestor, descendant]"
+        checks,
+      Text.isInfixOf
+        "tagType <- Main.capture gitTool [\"cat-file\", \"-t\", refName]"
+        checks,
+      Text.isInfixOf
+        "Main.require (Eq.eq (Text.strip tagType) \"tag\") \"release tag must be annotated\""
+        checks,
+      Text.isInfixOf
+        "peeled <- Main.capture gitTool\n        [\"rev-parse\", \"1.0.0_hell-2026-05-29^{}\"]"
+        checks,
+      Text.isInfixOf
+        "eventCommit <- Main.env \"GITHUB_SHA\""
+        checks,
+      Text.isInfixOf
+        "tagInMain <- Main.gitAncestor gitTool targetCommit \"origin/main\""
+        checks,
+      Text.isInfixOf
+        "mainInTag <- Main.gitAncestor gitTool \"origin/main\" targetCommit"
+        checks,
+      Text.isInfixOf
+        "Main.require\n        (Main.releaseCandidateHistoryValid tagInMain mainInTag)\n        \"tag target and origin/main have diverged\""
+        checks,
+      Text.isInfixOf
+        "Main.require\n        (Main.tagCommitIdentityValid targetCommit eventCommit)\n        \"peeled tag commit does not equal the event commit\""
+        checks
+    ]
+
+publishedReleaseTrustPolicyValid = \verifyWorkflow releaseControl ->
+  List.and
+    [ Text.isInfixOf
+        "      - name: Check out fixed release policy\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: \"1.0.0_hell-2026-05-29\"\n          fetch-depth: 0\n          persist-credentials: false"
+        verifyWorkflow,
+      Text.isInfixOf
+        "gitTool\n        [\"merge-base\", \"--is-ancestor\", ancestor, descendant]"
+        releaseControl,
+      Text.isInfixOf
+        "tagInMain <- Main.gitAncestor gitTool expectedCommit \"origin/main\""
+        releaseControl,
+      Text.isInfixOf
+        "Main.require\n    (Main.publishedReleaseHistoryValid tagInMain)\n    \"published tag commit is not contained in origin/main\""
+        releaseControl
     ]
 
 workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
@@ -829,6 +905,7 @@ checkPolicy = do
             ])
           (Text.concat ["workflow does not invoke its Hell script directly: ", path])
   flake <- Text.readFile "flake.nix"
+  checks <- Text.readFile "automation/hell-automation-checks.hell"
   releaseBuild <- Text.readFile "automation/hell-automation-release-build.hell"
   releaseControl <- Text.readFile "automation/hell-automation-release-control.hell"
   mainWorkflow <- Text.readFile ".github/workflows/main.yml"
@@ -856,6 +933,46 @@ checkPolicy = do
   Main.require
     (Main.releaseValidatorCallSitesValid releaseBuild releaseControl)
     "release automation validators must use substituted executable paths"
+  Main.require
+    (Main.releaseCandidateTrustPolicyValid checks)
+    "release candidate history trust policy differs"
+  Main.require
+    (Main.publishedReleaseTrustPolicyValid verifyWorkflow releaseControl)
+    "published release history trust policy differs"
+  Main.require
+    (Main.releaseCandidateHistoryValid Bool.True Bool.False)
+    "candidate policy rejected a tag ancestor of main"
+  Main.require
+    (Main.releaseCandidateHistoryValid Bool.False Bool.True)
+    "candidate policy rejected a main ancestor of tag"
+  Main.require
+    (Main.releaseCandidateHistoryValid Bool.True Bool.True)
+    "candidate policy rejected equal tag and main commits"
+  Main.require
+    (Bool.not (Main.releaseCandidateHistoryValid Bool.False Bool.False))
+    "candidate policy accepted diverged histories"
+  Main.require
+    (Main.publishedReleaseHistoryValid Bool.True)
+    "published policy rejected a tag contained in main"
+  Main.require
+    (Bool.not (Main.publishedReleaseHistoryValid Bool.False))
+    "published policy accepted a tag outside main"
+  let sampleCommit = "0123456789abcdef0123456789abcdef01234567"
+  Main.require
+    (Main.tagCommitIdentityValid sampleCommit sampleCommit)
+    "matching tag/event commits were rejected"
+  Main.require
+    (Bool.not
+      (Main.tagCommitIdentityValid
+        sampleCommit
+        "1123456789abcdef0123456789abcdef01234567"))
+    "mismatched tag/event commits were accepted"
+  Main.require
+    (Bool.not
+      (Main.tagCommitIdentityValid
+        sampleCommit
+        "0123456789ABCDEF0123456789abcdef01234567"))
+    "non-canonical event commit was accepted"
   Main.require
     (Bool.not
       (Main.releaseTagPolicyValid
@@ -1019,8 +1136,16 @@ checkMetadata = do
       Main.require (Eq.eq (Text.strip tagType) "tag") "release tag must be annotated"
       peeled <- Main.capture gitTool
         ["rev-parse", "1.0.0_hell-2026-05-29^{}"]
-      Main.require (Eq.eq (Text.length (Text.strip peeled)) Main.fullCommitWidth) "tag does not peel to a full commit"
-      Main.run gitTool ["merge-base", "--is-ancestor", Text.strip peeled, "origin/main"]
+      eventCommit <- Main.env "GITHUB_SHA"
+      let targetCommit = Text.strip peeled
+      Main.require
+        (Main.tagCommitIdentityValid targetCommit eventCommit)
+        "peeled tag commit does not equal the event commit"
+      tagInMain <- Main.gitAncestor gitTool targetCommit "origin/main"
+      mainInTag <- Main.gitAncestor gitTool "origin/main" targetCommit
+      Main.require
+        (Main.releaseCandidateHistoryValid tagInMain mainInTag)
+        "tag target and origin/main have diverged"
     else IO.pure ()
   Text.putStrLn "release metadata mappings are valid"
 

@@ -18,12 +18,20 @@ Before the first release, repository owners must:
 
 The protected tag workflow validates the tag, builds and tests both native
 Linux architectures, creates the exact six assets, attests them, and creates
-or verifies a draft release. It never publishes the release. A maintainer
-reviews the draft, explicitly selects **Set as latest release**, and uses the
-Releases page **Publish release** button. After publication, the maintainer
-confirms the release displays GitHub's **Latest** badge. Publication starts a
-separate read-only verification workflow; that workflow may report a failure
-but cannot edit, delete, replace, or republish anything.
+or verifies a draft release. It accepts the exact annotated candidate tag only
+when its peeled target equals the event commit and the target is linearly
+comparable with the current `origin/main`; diverged or unrelated targets are
+rejected. It never publishes the release.
+
+Before publication, a maintainer merges the exact tagged commit into protected
+`main` without moving the tag, waits for required checks, and confirms the tag
+target is contained in `origin/main`. The maintainer then reviews the draft,
+explicitly selects **Set as latest release**, and uses the Releases page
+**Publish release** button. After publication, the maintainer confirms the
+release displays GitHub's **Latest** badge. Publication starts a separate
+read-only verification workflow that independently requires the tagged commit
+to be contained in `origin/main`; that workflow may report a failure but cannot
+edit, delete, replace, or republish anything.
 
 Release tags use `<AIC-SemVer>_hell-<Hell-YYYY-MM-DD>`. This is a composite
 two-axis identifier, not SemVer, so release chronology and GitHub's latest

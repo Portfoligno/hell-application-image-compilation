@@ -278,10 +278,15 @@ acceptance = \automation product sourceRoot -> do
       \name -> do
         body <- Text.readFile (Main.joinPath sourceReleaseDirectory name)
         Text.writeFile (Main.joinPath releaseDirectory name) body
+    let checksSourcePath = "automation/hell-automation-checks.hell"
     let releaseBuildSourcePath = "automation/hell-automation-release-build.hell"
     let releaseControlSourcePath = "automation/hell-automation-release-control.hell"
+    checksSource <- Text.readFile (Main.joinPath sourceRoot checksSourcePath)
     releaseBuildSource <- Text.readFile (Main.joinPath sourceRoot releaseBuildSourcePath)
     releaseControlSource <- Text.readFile (Main.joinPath sourceRoot releaseControlSourcePath)
+    Text.writeFile
+      (Main.joinPath temporary checksSourcePath)
+      checksSource
     Text.writeFile
       (Main.joinPath temporary releaseBuildSourcePath)
       releaseBuildSource
@@ -498,6 +503,78 @@ acceptance = \automation product sourceRoot -> do
         verifyWorkflow)
       findPath statPath
       "policy accepted different publication verification refs"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/verify-published.yml" verifyWorkflow
+      (Text.replace
+        "          ref: \"1.0.0_hell-2026-05-29\"\n          fetch-depth: 0\n"
+        "          ref: \"1.0.0_hell-2026-05-29\"\n"
+        verifyWorkflow)
+      findPath statPath
+      "policy accepted publication verification without main history"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "tagInMain <- Main.gitAncestor gitTool targetCommit \"origin/main\""
+        "tagInMain <- Main.gitAncestor gitTool \"origin/main\" targetCommit"
+        checksSource)
+      findPath statPath
+      "policy accepted a reversed candidate tag ancestry query"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "mainInTag <- Main.gitAncestor gitTool \"origin/main\" targetCommit"
+        "mainInTag <- Main.gitAncestor gitTool targetCommit \"origin/main\""
+        checksSource)
+      findPath statPath
+      "policy accepted a reversed candidate main ancestry query"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "Main.tagCommitIdentityValid targetCommit eventCommit"
+        "Main.tagCommitIdentityValid targetCommit targetCommit"
+        checksSource)
+      findPath statPath
+      "policy accepted bypassing the exact event commit identity"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "tagType <- Main.capture gitTool [\"cat-file\", \"-t\", refName]"
+        "tagType <- Main.capture gitTool [\"cat-file\", \"-s\", refName]"
+        checksSource)
+      findPath statPath
+      "policy accepted bypassing annotated tag type validation"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "eventCommit <- Main.env \"GITHUB_SHA\""
+        "eventCommit <- Main.env \"GITHUB_REF\""
+        checksSource)
+      findPath statPath
+      "policy accepted a non-event commit identity source"
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "[\"merge-base\", \"--is-ancestor\", ancestor, descendant]"
+        "[\"merge-base\", \"--independent\", ancestor, descendant]"
+        checksSource)
+      findPath statPath
+      "policy accepted a different candidate ancestry command"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "tagInMain <- Main.gitAncestor gitTool expectedCommit \"origin/main\""
+        "tagInMain <- Main.gitAncestor gitTool \"origin/main\" expectedCommit"
+        releaseControlSource)
+      findPath statPath
+      "policy accepted a reversed published ancestry query"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "[\"merge-base\", \"--is-ancestor\", ancestor, descendant]"
+        "[\"merge-base\", \"--independent\", ancestor, descendant]"
+        releaseControlSource)
+      findPath statPath
+      "policy accepted a different published ancestry command"
     Main.expectPolicyMutationFailure
       automation temporary ".github/workflows/cache.yml" cacheWorkflow
       (Text.replace
