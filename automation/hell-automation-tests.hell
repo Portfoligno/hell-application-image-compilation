@@ -258,12 +258,14 @@ acceptance = \automation product sourceRoot -> do
     let githubDirectory = Main.joinPath temporary ".github"
     let workflowDirectory = Main.joinPath githubDirectory "workflows"
     let releaseDirectory = Main.joinPath temporary "release"
+    let automationDirectory = Main.joinPath temporary "automation"
     let sourceGithubDirectory = Main.joinPath sourceRoot ".github"
     let sourceWorkflowDirectory = Main.joinPath sourceGithubDirectory "workflows"
     let sourceReleaseDirectory = Main.joinPath sourceRoot "release"
     Directory.createDirectory githubDirectory
     Directory.createDirectory workflowDirectory
     Directory.createDirectory releaseDirectory
+    Directory.createDirectory automationDirectory
     Monad.forM_
       [ "main.yml", "release.yml", "verify-published.yml",
         "cache-request.yml", "cache.yml"
@@ -276,6 +278,16 @@ acceptance = \automation product sourceRoot -> do
       \name -> do
         body <- Text.readFile (Main.joinPath sourceReleaseDirectory name)
         Text.writeFile (Main.joinPath releaseDirectory name) body
+    let releaseBuildSourcePath = "automation/hell-automation-release-build.hell"
+    let releaseControlSourcePath = "automation/hell-automation-release-control.hell"
+    releaseBuildSource <- Text.readFile (Main.joinPath sourceRoot releaseBuildSourcePath)
+    releaseControlSource <- Text.readFile (Main.joinPath sourceRoot releaseControlSourcePath)
+    Text.writeFile
+      (Main.joinPath temporary releaseBuildSourcePath)
+      releaseBuildSource
+    Text.writeFile
+      (Main.joinPath temporary releaseControlSourcePath)
+      releaseControlSource
     flakeSource <- Text.readFile (Main.joinPath sourceRoot "flake.nix")
     Text.writeFile (Main.joinPath temporary "flake.nix") flakeSource
     securitySource <- Text.readFile (Main.joinPath sourceRoot "SECURITY.md")
@@ -687,6 +699,62 @@ acceptance = \automation product sourceRoot -> do
       (Text.replace "allowSubstitutes = false;" "allowSubstitutes = true;" flake)
       findPath statPath
       "policy accepted substitutable product and gate leaves"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;"
+        "checkJsonschema = \"check-jsonschema\";"
+        flake)
+      findPath statPath
+      "policy accepted a PATH-only JSON Schema validator"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "pkgs.python3Packages.spdx-tools"
+        "pkgs.python3Packages.pip"
+        flake)
+      findPath statPath
+      "policy accepted the wrong SPDX validator closure"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "args = [ \"validator-contract\" ];"
+        "args = [ \"check-runtime\" ];"
+        flake)
+      findPath statPath
+      "policy accepted loss of packaged validator closure execution"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "Main.run checkJsonschemaTool"
+        "Main.run \"check-jsonschema\""
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted a PATH-only release-build JSON Schema call"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "Main.run pyspdxtoolsTool"
+        "Main.run \"pyspdxtools\""
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted a PATH-only release-build SPDX call"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "Main.run checkJsonschemaTool"
+        "Main.run \"check-jsonschema\""
+        releaseControlSource)
+      findPath statPath
+      "policy accepted a PATH-only release-control JSON Schema call"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "Main.run pyspdxtoolsTool"
+        "Main.run \"pyspdxtools\""
+        releaseControlSource)
+      findPath statPath
+      "policy accepted a PATH-only release-control SPDX call"
     Main.expectPolicyMutationFailure
       automation temporary "flake.nix" flake
       (Text.replace

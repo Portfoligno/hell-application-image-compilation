@@ -143,18 +143,46 @@
           mkHellImage
             "hell-automation-checks"
             ./automation/hell-automation-checks.hell;
+        hellAutomationReleaseBuildSource =
+          pkgs.replaceVars ./automation/hell-automation-release-build.hell {
+            checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;
+            pyspdxtools =
+              pkgs.lib.getExe'
+                pkgs.python3Packages.spdx-tools
+                "pyspdxtools";
+          };
         hellAutomationReleaseBuild =
           mkHellImage
             "hell-automation-release-build"
-            ./automation/hell-automation-release-build.hell;
+            hellAutomationReleaseBuildSource;
         hellAutomationReleaseControlSource =
           pkgs.replaceVars ./automation/hell-automation-release-control.hell {
             releaseBuildImage = hellAutomationReleaseBuild;
+            checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;
+            pyspdxtools =
+              pkgs.lib.getExe'
+                pkgs.python3Packages.spdx-tools
+                "pyspdxtools";
           };
         hellAutomationReleaseControl =
           mkHellImage
             "hell-automation-release-control"
             hellAutomationReleaseControlSource;
+        mkReleaseValidatorContract = name: image:
+          builtins.derivation {
+            inherit system;
+            name = "hell-${name}-validator-contract-${system}";
+            builder = image;
+            args = [ "validator-contract" ];
+          };
+        releaseBuildValidatorContract =
+          mkReleaseValidatorContract
+            "release-build"
+            hellAutomationReleaseBuild;
+        releaseControlValidatorContract =
+          mkReleaseValidatorContract
+            "release-control"
+            hellAutomationReleaseControl;
         hellAutomationDispatcherSource =
           pkgs.replaceVars ./automation/hell-automation.hell {
             checksImage = hellAutomationChecks;
@@ -384,6 +412,8 @@
             mkAutomationCheck "automation" "policy" hellAutomationChecks;
           metadata =
             mkAutomationCheck "metadata" "metadata" hellAutomationChecks;
+          release-build-validator-contract = releaseBuildValidatorContract;
+          release-control-validator-contract = releaseControlValidatorContract;
           hpack-drift =
             mkAutomationCheck "hpack-drift" "hpack-drift" hellAutomationChecks;
           documentation =

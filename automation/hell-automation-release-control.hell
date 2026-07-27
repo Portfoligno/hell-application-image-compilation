@@ -141,6 +141,38 @@ defaultReleaseBuildImage =
     then "automation/hell-automation-release-build.hell"
     else Main.substitutedReleaseBuildImage
 
+substitutedCheckJsonschema = "@checkJsonschema@"
+defaultCheckJsonschema =
+  if Text.isPrefixOf "@" Main.substitutedCheckJsonschema
+    then "check-jsonschema"
+    else Main.substitutedCheckJsonschema
+
+substitutedPyspdxtools = "@pyspdxtools@"
+defaultPyspdxtools =
+  if Text.isPrefixOf "@" Main.substitutedPyspdxtools
+    then "pyspdxtools"
+    else Main.substitutedPyspdxtools
+
+validatorContract = do
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  pyspdxtoolsTool <-
+    Main.envDefault "HELL_TOOL_PYSPDXTOOLS" Main.defaultPyspdxtools
+  Main.require
+    (Text.isPrefixOf "/" checkJsonschemaTool)
+    "JSON Schema validator is not an absolute executable"
+  Main.require
+    (Text.isPrefixOf "/" pyspdxtoolsTool)
+    "SPDX validator is not an absolute executable"
+  checkJsonschemaExists <- Directory.doesFileExist checkJsonschemaTool
+  pyspdxtoolsExists <- Directory.doesFileExist pyspdxtoolsTool
+  Main.require checkJsonschemaExists "JSON Schema validator is absent from the closure"
+  Main.require pyspdxtoolsExists "SPDX validator is absent from the closure"
+  Main.run checkJsonschemaTool ["--version"]
+  Main.run pyspdxtoolsTool ["--help"]
+  output <- Main.env "out"
+  Text.writeFile output "release-control validator closure passed\n"
+
 delegateRuntime = \binary architecture -> do
   releaseBuildImage <-
     Main.envDefault "HELL_AUTOMATION_RELEASE_BUILD" Main.defaultReleaseBuildImage
@@ -229,7 +261,9 @@ aggregate = \incoming output commit -> do
         ])
   ByteString.writeFile (Main.joinPath output "release.json") (Json.encode releaseManifest)
   schema <- Main.envDefault "HELL_RELEASE_SCHEMA" "release/release-manifest.schema.json"
-  Main.run "check-jsonschema"
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  Main.run checkJsonschemaTool
     ["--schemafile", schema, Main.joinPath output "release.json"]
   sums <-
     Main.captureIn output "sha256sum"
@@ -353,6 +387,10 @@ verifyPublished = \directory -> do
   Main.require (Eq.eq (List.length artifacts) 2) "release manifest must contain two artifacts"
   shaTool <- Main.envDefault "HELL_TOOL_SHA256SUM" "sha256sum"
   statTool <- Main.envDefault "HELL_TOOL_STAT" "stat"
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  pyspdxtoolsTool <-
+    Main.envDefault "HELL_TOOL_PYSPDXTOOLS" Main.defaultPyspdxtools
   Monad.forM_ artifacts \artifact -> do
     let archiveMetadata = Main.jsonObjectField "archive" artifact
     let sbomMetadata = Main.jsonObjectField "sbom" artifact
@@ -372,12 +410,12 @@ verifyPublished = \directory -> do
           Eq.eq sbomSize (Main.jsonNumber (Main.jsonObjectField "size" sbomMetadata))
         ])
       "release manifest digest/size differs from downloaded bytes"
-  Main.run "check-jsonschema"
+  Main.run checkJsonschemaTool
     ["--schemafile", "release/release-manifest.schema.json", Main.joinPath directory "release.json"]
   Monad.forM_ [Main.armSpdx, Main.x86Spdx] \name -> do
-    Main.run "check-jsonschema"
+    Main.run checkJsonschemaTool
       ["--schemafile", "release/spdx-2.3.schema.json", Main.joinPath directory name]
-    Main.run "pyspdxtools"
+    Main.run pyspdxtoolsTool
       ["--infile", Main.joinPath directory name, "--version", "SPDX-2.3"]
   Main.run ghTool ["release", "verify", Main.fixedTag, "--repo", Main.fixedRepository]
   Monad.forM_ [Main.armArchive, Main.x86Archive, "SHA256SUMS"] \name ->
@@ -439,4 +477,6 @@ main = do
       Main.require (Eq.eq enabled "enabled") "test-only runtime delegation is disabled"
       Main.require (Eq.eq count 3) "test-runtime-delegation requires binary and architecture"
       Main.delegateRuntime (Main.argument 1 arguments) (Main.argument 2 arguments)
-  else Main.die "usage: hell-automation release-control command"
+  else if Eq.eq command "validator-contract" then Main.validatorContract
+  else Main.die
+    "usage: hell-automation release-control {aggregate|stage-draft|verify-published|validator-contract}"

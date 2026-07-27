@@ -130,6 +130,38 @@ argument = \position values ->
     Function.id
     (Maybe.listToMaybe (List.drop position values))
 
+substitutedCheckJsonschema = "@checkJsonschema@"
+defaultCheckJsonschema =
+  if Text.isPrefixOf "@" Main.substitutedCheckJsonschema
+    then "check-jsonschema"
+    else Main.substitutedCheckJsonschema
+
+substitutedPyspdxtools = "@pyspdxtools@"
+defaultPyspdxtools =
+  if Text.isPrefixOf "@" Main.substitutedPyspdxtools
+    then "pyspdxtools"
+    else Main.substitutedPyspdxtools
+
+validatorContract = do
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  pyspdxtoolsTool <-
+    Main.envDefault "HELL_TOOL_PYSPDXTOOLS" Main.defaultPyspdxtools
+  Main.require
+    (Text.isPrefixOf "/" checkJsonschemaTool)
+    "JSON Schema validator is not an absolute executable"
+  Main.require
+    (Text.isPrefixOf "/" pyspdxtoolsTool)
+    "SPDX validator is not an absolute executable"
+  checkJsonschemaExists <- Directory.doesFileExist checkJsonschemaTool
+  pyspdxtoolsExists <- Directory.doesFileExist pyspdxtoolsTool
+  Main.require checkJsonschemaExists "JSON Schema validator is absent from the closure"
+  Main.require pyspdxtoolsExists "SPDX validator is absent from the closure"
+  Main.run checkJsonschemaTool ["--version"]
+  Main.run pyspdxtoolsTool ["--help"]
+  output <- Main.env "out"
+  Text.writeFile output "release-build validator closure passed\n"
+
 fixedVersion = "Hell 2026-05-29 — Application Image Compilation 1.0.0"
 fixedTag = "1.0.0_hell-2026-05-29"
 fixedRepository = "Portfoligno/hell-application-image-compilation"
@@ -326,9 +358,13 @@ checkBundle = \directory architecture -> do
         else if Text.isSuffixOf "/" line
           then Main.require (Text.isPrefixOf "drwxr-xr-x" line) "archive root mode must be 0755"
           else Main.require (Text.isPrefixOf "-rw-r--r--" line) "archive document mode must be 0644"
-  Main.run "check-jsonschema"
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  pyspdxtoolsTool <-
+    Main.envDefault "HELL_TOOL_PYSPDXTOOLS" Main.defaultPyspdxtools
+  Main.run checkJsonschemaTool
     ["--schemafile", "release/spdx-2.3.schema.json", Main.joinPath directory spdxName]
-  Main.run "pyspdxtools"
+  Main.run pyspdxtoolsTool
     ["--infile", Main.joinPath directory spdxName, "--version", "SPDX-2.3"]
   Temp.withSystemTempDirectory "hell-bundle" \temporary -> do
     Main.run "tar"
@@ -536,4 +572,6 @@ main = do
           else Main.env "HELL_TARGET_ARCH"
       Main.checkBundle (Main.argument 1 arguments) architecture
   else if Eq.eq command "nix-release" then Main.nixRelease
-  else Main.die "usage: hell-automation release-build command"
+  else if Eq.eq command "validator-contract" then Main.validatorContract
+  else Main.die
+    "usage: hell-automation release-build {check-runtime|check-bundle|nix-release|validator-contract}"

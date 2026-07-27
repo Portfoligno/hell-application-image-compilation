@@ -220,6 +220,49 @@ releaseTagPolicyValid = \releaseWorkflow verifyWorkflow ->
         3
     ]
 
+releaseValidatorClosureValid = \flake ->
+  List.and
+    [ Text.isInfixOf
+        "hellAutomationReleaseBuildSource =\n          pkgs.replaceVars ./automation/hell-automation-release-build.hell {\n            checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;\n            pyspdxtools =\n              pkgs.lib.getExe'\n                pkgs.python3Packages.spdx-tools\n                \"pyspdxtools\";\n          };\n        hellAutomationReleaseBuild =\n          mkHellImage\n            \"hell-automation-release-build\"\n            hellAutomationReleaseBuildSource;"
+        flake,
+      Text.isInfixOf
+        "hellAutomationReleaseControlSource =\n          pkgs.replaceVars ./automation/hell-automation-release-control.hell {\n            releaseBuildImage = hellAutomationReleaseBuild;\n            checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;\n            pyspdxtools =\n              pkgs.lib.getExe'\n                pkgs.python3Packages.spdx-tools\n                \"pyspdxtools\";\n          };"
+        flake,
+      Text.isInfixOf "args = [ \"validator-contract\" ];" flake,
+      Text.isInfixOf
+        "releaseBuildValidatorContract =\n          mkReleaseValidatorContract\n            \"release-build\"\n            hellAutomationReleaseBuild;"
+        flake,
+      Text.isInfixOf
+        "releaseControlValidatorContract =\n          mkReleaseValidatorContract\n            \"release-control\"\n            hellAutomationReleaseControl;"
+        flake,
+      Text.isInfixOf
+        "release-build-validator-contract = releaseBuildValidatorContract;"
+        flake,
+      Text.isInfixOf
+        "release-control-validator-contract = releaseControlValidatorContract;"
+        flake
+    ]
+
+releaseValidatorCallSitesValid = \releaseBuild releaseControl ->
+  List.and
+    [ Bool.not (Text.isInfixOf "Main.run \"check-jsonschema\"" releaseBuild),
+      Bool.not (Text.isInfixOf "Main.run \"pyspdxtools\"" releaseBuild),
+      Bool.not (Text.isInfixOf "Main.run \"check-jsonschema\"" releaseControl),
+      Bool.not (Text.isInfixOf "Main.run \"pyspdxtools\"" releaseControl),
+      Eq.eq
+        (List.length (Text.splitOn "Main.run checkJsonschemaTool" releaseBuild))
+        3,
+      Eq.eq
+        (List.length (Text.splitOn "Main.run pyspdxtoolsTool" releaseBuild))
+        3,
+      Eq.eq
+        (List.length (Text.splitOn "Main.run checkJsonschemaTool" releaseControl))
+        5,
+      Eq.eq
+        (List.length (Text.splitOn "Main.run pyspdxtoolsTool" releaseControl))
+        3
+    ]
+
 workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
   List.and
     [ Eq.eq
@@ -786,6 +829,8 @@ checkPolicy = do
             ])
           (Text.concat ["workflow does not invoke its Hell script directly: ", path])
   flake <- Text.readFile "flake.nix"
+  releaseBuild <- Text.readFile "automation/hell-automation-release-build.hell"
+  releaseControl <- Text.readFile "automation/hell-automation-release-control.hell"
   mainWorkflow <- Text.readFile ".github/workflows/main.yml"
   releaseWorkflow <- Text.readFile ".github/workflows/release.yml"
   verifyWorkflow <- Text.readFile ".github/workflows/verify-published.yml"
@@ -805,6 +850,12 @@ checkPolicy = do
   Main.require
     (Main.releaseTagPolicyValid releaseWorkflow verifyWorkflow)
     "release workflows must use only the reviewed tag"
+  Main.require
+    (Main.releaseValidatorClosureValid flake)
+    "release automation validators must be pinned into image closures"
+  Main.require
+    (Main.releaseValidatorCallSitesValid releaseBuild releaseControl)
+    "release automation validators must use substituted executable paths"
   Main.require
     (Bool.not
       (Main.releaseTagPolicyValid
