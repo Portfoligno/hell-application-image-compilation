@@ -11,10 +11,15 @@ joinPath = \parent child ->
 die = \message -> Exit.die (Text.concat ["hell automation: ", message])
 
 runConfigured = \label process -> do
-  (code, _out, err) <- Text.readProcess process
+  (code, out, err) <- Text.readProcess process
   if Eq.eq code Exit.ExitSuccess
     then IO.pure ()
-    else Main.die (Text.concat ["child failed: ", label, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", label,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 run = \executable arguments ->
   Main.runConfigured executable (Process.proc executable arguments)
@@ -31,7 +36,12 @@ capture = \executable arguments -> do
   (code, out, err) <- Text.readProcess (Process.proc executable arguments)
   if Eq.eq code Exit.ExitSuccess
     then IO.pure out
-    else Main.die (Text.concat ["child failed: ", executable, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", executable,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 gitAncestor = \gitTool ancestor descendant -> do
   (code, _out, _err) <-

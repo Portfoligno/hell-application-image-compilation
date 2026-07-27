@@ -109,6 +109,21 @@ compileFailingRuntimePeer = \product temporary -> do
     (Process.proc product ["--compile", source, "--output", image])
   IO.pure image
 
+compileFailingDiagnosticProbe = \product temporary -> do
+  let source = Main.joinPath temporary "failing-diagnostic-probe.hell"
+  let image = Main.joinPath temporary "failing-diagnostic-probe"
+  Text.writeFile source (Text.unlines
+    [ "main :: IO () = do",
+      "  arguments <- Environment.getArgs",
+      "  Text.putStrLn",
+      "    (Text.concat [\"validator stdout diagnostic:\", Text.intercalate \"|\" arguments])",
+      "  Text.hPutStr IO.stderr \"validator stderr diagnostic\\n\"",
+      "  Exit.exitWith (Exit.ExitFailure 29)"
+    ])
+  Process.runProcess_
+    (Process.proc product ["--compile", source, "--output", image])
+  IO.pure image
+
 modeEnvironment = \automation sourceRoot -> do
   mode <- Main.env "HELL_CHECK_MODE"
   if Eq.eq (Maybe.maybe "" Function.id mode) "hpack-drift"
@@ -254,6 +269,39 @@ acceptance = \automation product sourceRoot -> do
           (Eq.eq (Text.lines logged) ["check-runtime", "binary value", "aarch64"])
           "release-control changed runtime peer arguments")
     releaseControl
+  releaseBuild <- Main.env "HELL_AUTOMATION_RELEASE_BUILD_IMAGE"
+  Maybe.maybe
+    (IO.pure ())
+    (\releaseBuildPath ->
+      Temp.withSystemTempDirectory "hell-child-diagnostics" \temporary -> do
+        failingValidator <- Main.compileFailingDiagnosticProbe product temporary
+        process <-
+          Main.withEnvironment
+            [ ("HELL_TOOL_CHECK_JSONSCHEMA", failingValidator),
+              ("HELL_TOOL_PYSPDXTOOLS", failingValidator)
+            ]
+            (Process.proc releaseBuildPath ["validator-contract"])
+        (code, _out, err) <- Text.readProcess process
+        Main.assert
+          (Bool.not (Eq.eq code Exit.ExitSuccess))
+          "release-build accepted a failing validator"
+        Main.assert
+          (Text.isInfixOf
+            (Text.concat
+              ["child failed: ", failingValidator, "\n--- stdout ---"])
+            err)
+          "release-build changed the failed child label"
+        Main.assert
+          (Text.isInfixOf
+            "--- stdout ---\nvalidator stdout diagnostic:--version"
+            err)
+          "release-build discarded validator stdout or changed its argv"
+        Main.assert
+          (Text.isInfixOf
+            "--- stderr ---\nvalidator stderr diagnostic"
+            err)
+          "release-build discarded validator stderr diagnostics")
+    releaseBuild
   Temp.withSystemTempDirectory "hell-cache-policy-negative" \temporary -> do
     let githubDirectory = Main.joinPath temporary ".github"
     let workflowDirectory = Main.joinPath githubDirectory "workflows"
@@ -284,6 +332,8 @@ acceptance = \automation product sourceRoot -> do
     checksSource <- Text.readFile (Main.joinPath sourceRoot checksSourcePath)
     releaseBuildSource <- Text.readFile (Main.joinPath sourceRoot releaseBuildSourcePath)
     releaseControlSource <- Text.readFile (Main.joinPath sourceRoot releaseControlSourcePath)
+    spdxSchema <-
+      Text.readFile (Main.joinPath sourceReleaseDirectory "spdx-2.3.schema.json")
     Text.writeFile
       (Main.joinPath temporary checksSourcePath)
       checksSource
@@ -801,6 +851,14 @@ acceptance = \automation product sourceRoot -> do
       findPath statPath
       "policy accepted loss of packaged validator closure execution"
     Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flake
+      (Text.replace
+        "HELL_AUTOMATION_RELEASE_BUILD_IMAGE = hellAutomationReleaseBuild;"
+        "HELL_AUTOMATION_RELEASE_BUILD_IMAGE = hellAutomationReleaseControl;"
+        flake)
+      findPath statPath
+      "policy accepted diagnostic testing against the wrong automation image"
+    Main.expectPolicyMutationFailure
       automation temporary releaseBuildSourcePath releaseBuildSource
       (Text.replace
         "Main.run checkJsonschemaTool"
@@ -816,6 +874,62 @@ acceptance = \automation product sourceRoot -> do
         releaseBuildSource)
       findPath statPath
       "policy accepted a PATH-only release-build SPDX call"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "Text.concat (List.sort checksums)"
+        "Text.concat checksums"
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted unsorted SPDX package verification input"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "Text.concat [\"SPDXRef-Dependency-\", kind, \"-\", name]"
+        "Text.concat [\"SPDXRef-Dependency-\", name]"
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted name-only duplicate SPDX component identifiers"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "(\"packageVerificationCode\", Json.Object"
+        "(\"packageVerificationCodeOmitted\", Json.Object"
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted omission of the SPDX package verification code"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "  Main.run checkJsonschemaTool\n    [\"--schemafile\", spdxSchema, spdxPath]\n  Main.run pyspdxtoolsTool\n    [\"--infile\", spdxPath, \"--version\", \"SPDX-2.3\"]\n  archiveSha <-"
+        "  archiveSha <-"
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted omission of producer-side SPDX validation"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "  Main.run checkJsonschemaTool\n    [\"--schemafile\", spdxSchema, spdxPath]\n  Main.run pyspdxtoolsTool\n    [\"--infile\", spdxPath, \"--version\", \"SPDX-2.3\"]\n  archiveSha <- Main.digest sha256Tool archive"
+        "  archiveSha <- Main.digest sha256Tool archive\n  Main.run checkJsonschemaTool\n    [\"--schemafile\", spdxSchema, spdxPath]\n  Main.run pyspdxtoolsTool\n    [\"--infile\", spdxPath, \"--version\", \"SPDX-2.3\"]"
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted producer-side SPDX validation after artifact digestion"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseBuildSourcePath releaseBuildSource
+      (Text.replace
+        "\"\\n--- stdout ---\\n\", out"
+        "\"\\n--- stdout discarded ---\\n\""
+        releaseBuildSource)
+      findPath statPath
+      "policy accepted discarded child stdout diagnostics"
+    Main.expectPolicyMutationFailure
+      automation temporary "release/spdx-2.3.schema.json" spdxSchema
+      (Text.replace
+        "          \"filesAnalyzed\",\n          \"packageVerificationCode\"\n"
+        "          \"filesAnalyzed\"\n"
+        spdxSchema)
+      findPath statPath
+      "policy accepted loss of the required SPDX package verification code"
     Main.expectPolicyMutationFailure
       automation temporary releaseControlSourcePath releaseControlSource
       (Text.replace

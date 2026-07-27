@@ -11,10 +11,15 @@ joinPath = \parent child ->
 die = \message -> Exit.die (Text.concat ["hell automation: ", message])
 
 runConfigured = \label process -> do
-  (code, _out, err) <- Text.readProcess process
+  (code, out, err) <- Text.readProcess process
   if Eq.eq code Exit.ExitSuccess
     then IO.pure ()
-    else Main.die (Text.concat ["child failed: ", label, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", label,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 run = \executable arguments ->
   Main.runConfigured executable (Process.proc executable arguments)
@@ -50,7 +55,12 @@ capture = \executable arguments -> do
   (code, out, err) <- Text.readProcess (Process.proc executable arguments)
   if Eq.eq code Exit.ExitSuccess
     then IO.pure out
-    else Main.die (Text.concat ["child failed: ", executable, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", executable,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 gitAncestor = \gitTool ancestor descendant -> do
   (code, _out, _err) <-
@@ -269,6 +279,9 @@ releaseValidatorClosureValid = \flake ->
         flake,
       Text.isInfixOf
         "release-control-validator-contract = releaseControlValidatorContract;"
+        flake,
+      Text.isInfixOf
+        "HELL_AUTOMATION_RELEASE_BUILD_IMAGE = hellAutomationReleaseBuild;"
         flake
     ]
 
@@ -280,16 +293,60 @@ releaseValidatorCallSitesValid = \releaseBuild releaseControl ->
       Bool.not (Text.isInfixOf "Main.run \"pyspdxtools\"" releaseControl),
       Eq.eq
         (List.length (Text.splitOn "Main.run checkJsonschemaTool" releaseBuild))
-        3,
+        4,
       Eq.eq
         (List.length (Text.splitOn "Main.run pyspdxtoolsTool" releaseBuild))
-        3,
+        4,
       Eq.eq
         (List.length (Text.splitOn "Main.run checkJsonschemaTool" releaseControl))
         5,
       Eq.eq
         (List.length (Text.splitOn "Main.run pyspdxtoolsTool" releaseControl))
         3
+    ]
+
+releaseSpdxVerificationValid = \spdxSchema releaseBuild ->
+  List.and
+    [ Text.isInfixOf
+        "\"required\": [\n          \"SPDXID\",\n          \"filesAnalyzed\",\n          \"packageVerificationCode\""
+        spdxSchema,
+      Text.isInfixOf
+        "\"required\": [\n              \"packageVerificationCodeValue\""
+        spdxSchema,
+      Text.isInfixOf
+        "packageVerificationInput = \\checksums ->\n  Text.concat (List.sort checksums)"
+        releaseBuild,
+      Text.isInfixOf
+        "componentIdentifier = \\kind name ->\n  Text.concat [\"SPDXRef-Dependency-\", kind, \"-\", name]"
+        releaseBuild,
+      Text.isInfixOf
+        "Main.componentIdentifier\n          (Main.jsonString (Main.jsonObjectField \"kind\" value))\n          (Main.jsonString (Main.jsonObjectField \"name\" value))"
+        releaseBuild,
+      Text.isInfixOf
+        "Main.spdxIdentifierPartValid kind,\n          Main.spdxIdentifierPartValid name"
+        releaseBuild,
+      Text.isInfixOf
+        "Main.packageVerificationInput [binarySha1, readmeSha1, licenseSha1]"
+        releaseBuild,
+      Text.isInfixOf
+        "(\"packageVerificationCode\", Json.Object (Map.fromList\n            [(\"packageVerificationCodeValue\", Json.String packageVerificationCode)]))"
+        releaseBuild,
+      Text.isInfixOf
+        "    ])))\n  Main.run checkJsonschemaTool\n    [\"--schemafile\", spdxSchema, spdxPath]\n  Main.run pyspdxtoolsTool\n    [\"--infile\", spdxPath, \"--version\", \"SPDX-2.3\"]\n  archiveSha <-"
+        releaseBuild
+    ]
+
+childFailureDiagnosticsValid = \source ->
+  List.and
+    [ Text.isInfixOf
+        "(code, out, err) <- Text.readProcess process"
+        source,
+      Text.isInfixOf
+        "\"\\n--- stdout ---\\n\", out"
+        source,
+      Text.isInfixOf
+        "\"\\n--- stderr ---\\n\", err"
+        source
     ]
 
 releaseCandidateTrustPolicyValid = \checks ->
@@ -908,6 +965,7 @@ checkPolicy = do
   checks <- Text.readFile "automation/hell-automation-checks.hell"
   releaseBuild <- Text.readFile "automation/hell-automation-release-build.hell"
   releaseControl <- Text.readFile "automation/hell-automation-release-control.hell"
+  spdxSchema <- Text.readFile "release/spdx-2.3.schema.json"
   mainWorkflow <- Text.readFile ".github/workflows/main.yml"
   releaseWorkflow <- Text.readFile ".github/workflows/release.yml"
   verifyWorkflow <- Text.readFile ".github/workflows/verify-published.yml"
@@ -933,6 +991,13 @@ checkPolicy = do
   Main.require
     (Main.releaseValidatorCallSitesValid releaseBuild releaseControl)
     "release automation validators must use substituted executable paths"
+  Main.require
+    (Main.releaseSpdxVerificationValid spdxSchema releaseBuild)
+    "SPDX package verification code policy differs"
+  Monad.forM_ [checks, releaseBuild, releaseControl] \source ->
+    Main.require
+      (Main.childFailureDiagnosticsValid source)
+      "child failure diagnostics do not preserve stdout and stderr"
   Main.require
     (Main.releaseCandidateTrustPolicyValid checks)
     "release candidate history trust policy differs"

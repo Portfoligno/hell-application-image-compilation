@@ -15,10 +15,15 @@ directoryMember = \path -> Main.joinPath path ""
 die = \message -> Exit.die (Text.concat ["hell automation: ", message])
 
 runConfigured = \label process -> do
-  (code, _out, err) <- Text.readProcess process
+  (code, out, err) <- Text.readProcess process
   if Eq.eq code Exit.ExitSuccess
     then IO.pure ()
-    else Main.die (Text.concat ["child failed: ", label, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", label,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 run = \executable arguments ->
   Main.runConfigured executable (Process.proc executable arguments)
@@ -31,7 +36,12 @@ capture = \executable arguments -> do
   (code, out, err) <- Text.readProcess (Process.proc executable arguments)
   if Eq.eq code Exit.ExitSuccess
     then IO.pure out
-    else Main.die (Text.concat ["child failed: ", executable, "\n", err])
+    else Main.die
+      (Text.concat
+        [ "child failed: ", executable,
+          "\n--- stdout ---\n", out,
+          "\n--- stderr ---\n", err
+        ])
 
 require = \condition message ->
   if condition then IO.pure () else Main.die message
@@ -111,6 +121,26 @@ digest = \tool path -> do
   output <- Main.capture tool ["--", path]
   IO.pure (Main.only (List.take 1 (Text.words output)))
 
+packageVerificationInput = \checksums ->
+  Text.concat (List.sort checksums)
+
+spdxIdentifierPartValid = \value ->
+  List.and
+    [ Bool.not (Eq.eq value ""),
+      Text.all
+        (\character -> List.elem character
+          [ 'a','b','c','d','e','f','g','h','i','j','k','l','m',
+            'n','o','p','q','r','s','t','u','v','w','x','y','z',
+            'A','B','C','D','E','F','G','H','I','J','K','L','M',
+            'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
+            '0','1','2','3','4','5','6','7','8','9','-','.'
+          ])
+        value
+    ]
+
+componentIdentifier = \kind name ->
+  Text.concat ["SPDXRef-Dependency-", kind, "-", name]
+
 sizeNumber = \statTool path -> do
   output <- Main.capture statTool ["--format=%s", "--", path]
   Maybe.maybe (Main.die "stat returned a non-number") IO.pure (Double.readMaybe (Text.strip output))
@@ -143,6 +173,29 @@ defaultPyspdxtools =
     else Main.substitutedPyspdxtools
 
 validatorContract = do
+  Main.require
+    (Eq.eq
+      (Main.packageVerificationInput ["bbbb", "aaaa", "cccc"])
+      "aaaabbbbcccc")
+    "SPDX package verification input is not sorted and concatenated"
+  Main.require
+    (List.and
+      [ Eq.eq
+          (Main.componentIdentifier "direct-cabal-dependency" "zlib")
+          "SPDXRef-Dependency-direct-cabal-dependency-zlib",
+        Eq.eq
+          (Main.componentIdentifier "linked-component" "zlib")
+          "SPDXRef-Dependency-linked-component-zlib",
+        Bool.not
+          (Eq.eq
+            (Main.componentIdentifier "direct-cabal-dependency" "zlib")
+            (Main.componentIdentifier "linked-component" "zlib")),
+        Main.spdxIdentifierPartValid "direct-cabal-dependency",
+        Main.spdxIdentifierPartValid "zlib",
+        Main.spdxIdentifierPartValid "QuickCheck",
+        Bool.not (Main.spdxIdentifierPartValid "zlib/native")
+      ])
+    "SPDX component identifiers are not unique, stable, and valid"
   checkJsonschemaTool <-
     Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
   pyspdxtoolsTool <-
@@ -424,8 +477,20 @@ nixRelease = do
   readmeSha256 <- Main.digest sha256Tool (Main.joinPath root "README.md")
   licenseSha1 <- Main.digest sha1Tool (Main.joinPath root "LICENSE")
   licenseSha256 <- Main.digest sha256Tool (Main.joinPath root "LICENSE")
+  packageVerificationCode <-
+    Temp.withSystemTempDirectory "hell-spdx-verification" \temporary -> do
+      let input = Main.joinPath temporary "checksums"
+      Text.writeFile input
+        (Main.packageVerificationInput [binarySha1, readmeSha1, licenseSha1])
+      Main.digest sha1Tool input
   let spdxName = Main.addExtension base ".spdx.json"
   let spdxPath = Main.joinPath output spdxName
+  spdxSchema <-
+    Main.envDefault "HELL_SPDX_SCHEMA" "release/spdx-2.3.schema.json"
+  checkJsonschemaTool <-
+    Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
+  pyspdxtoolsTool <-
+    Main.envDefault "HELL_TOOL_PYSPDXTOOLS" Main.defaultPyspdxtools
   let checksum = \algorithm value ->
         Json.Object (Map.fromList [("algorithm", Json.String algorithm), ("checksumValue", Json.String value)])
   let file = \name identifier sha1 sha256 kind copyright ->
@@ -443,6 +508,8 @@ nixRelease = do
           ("versionInfo", Json.String "1.0.0"),
           ("downloadLocation", Json.String "NOASSERTION"),
           ("filesAnalyzed", Json.Bool Bool.True),
+          ("packageVerificationCode", Json.Object (Map.fromList
+            [("packageVerificationCodeValue", Json.String packageVerificationCode)])),
           ("licenseConcluded", Json.String "BSD-3-Clause"),
           ("licenseDeclared", Json.String "BSD-3-Clause"),
           ("copyrightText", Json.String "Copyright (c) 2023, Chris Done")
@@ -463,8 +530,19 @@ nixRelease = do
           Vector.toList
           (\_ -> [])
           components
+  Monad.forM_ componentValues \value -> do
+    let kind = Main.jsonString (Main.jsonObjectField "kind" value)
+    let name = Main.jsonString (Main.jsonObjectField "name" value)
+    Main.require
+      (List.and
+        [ Main.spdxIdentifierPartValid kind,
+          Main.spdxIdentifierPartValid name
+        ])
+      "component kind or name cannot form a valid SPDX identifier"
   let componentId = \value ->
-        Text.concat ["SPDXRef-Dependency-", Main.jsonString (Main.jsonObjectField "name" value)]
+        Main.componentIdentifier
+          (Main.jsonString (Main.jsonObjectField "kind" value))
+          (Main.jsonString (Main.jsonObjectField "name" value))
   let componentPackage = \value ->
         Json.Object (Map.fromList
           [ ("name", Main.jsonObjectField "name" value),
@@ -503,6 +581,10 @@ nixRelease = do
         ([relation "SPDXRef-File-hell", relation "SPDXRef-File-README", relation "SPDXRef-File-LICENSE"]
          <> List.map dependencyRelation componentValues)))
     ])))
+  Main.run checkJsonschemaTool
+    ["--schemafile", spdxSchema, spdxPath]
+  Main.run pyspdxtoolsTool
+    ["--infile", spdxPath, "--version", "SPDX-2.3"]
   archiveSha <- Main.digest sha256Tool archive
   archiveSize <- Main.sizeNumber statTool archive
   spdxSha <- Main.digest sha256Tool spdxPath

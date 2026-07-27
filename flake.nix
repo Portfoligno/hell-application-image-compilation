@@ -337,6 +337,7 @@
             args = [ "nix-acceptance" ];
             HELL_AUTOMATION_TESTS = hellAutomationTests;
             HELL_AUTOMATION = hellAutomation;
+            HELL_AUTOMATION_RELEASE_BUILD_IMAGE = hellAutomationReleaseBuild;
             HELL_AUTOMATION_RELEASE_CONTROL_IMAGE = hellAutomationReleaseControl;
             HELL_PRODUCT_BINARY = pkgs.lib.getExe' app "hell";
             SOURCE_ROOT = ./.;
