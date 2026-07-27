@@ -44,14 +44,6 @@ jobs:
         run: ./result-automation-checks policy
       - name: Validate fixed release metadata and tag identity
         run: ./result-automation-checks metadata --check
-      - name: Show exact hpack dependency plan
-        run: nix build --dry-run --no-update-lock-file .#checks.x86_64-linux.hpack-drift
-      - name: Check exact hpack output
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.hpack-drift
-      - name: Check source distribution
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution
-      - name: Check tagged documentation
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.documentation
       - name: Run native flake checks
         run: nix flake check --max-jobs 1 --no-update-lock-file --print-build-logs
 

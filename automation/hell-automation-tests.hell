@@ -109,71 +109,8 @@ compileFailingRuntimePeer = \product temporary -> do
     (Process.proc product ["--compile", source, "--output", image])
   IO.pure image
 
-acceptance = \automation product sourceRoot -> do
-  findTool <- Main.env "HELL_TOOL_FIND"
-  statTool <- Main.env "HELL_TOOL_STAT"
+modeEnvironment = \automation sourceRoot -> do
   mode <- Main.env "HELL_CHECK_MODE"
-  staticBinary <- Main.env "HELL_STATIC_BINARY"
-  let findPath = Maybe.maybe "find" Function.id findTool
-  let statPath = Maybe.maybe "stat" Function.id statTool
-  Main.assert
-    (Maybe.maybe Bool.True (\_path -> Bool.False) staticBinary)
-    "generic automation check captured the static release binary"
-  Temp.withSystemTempDirectory "hell-dispatch" \temporary -> do
-    checksProbe <- Main.compileDispatchProbe product temporary "checks"
-    releaseBuildProbe <- Main.compileDispatchProbe product temporary "release-build"
-    releaseControlProbe <- Main.compileDispatchProbe product temporary "release-control"
-    let overrides =
-          [ ("HELL_AUTOMATION_CHECKS", checksProbe),
-            ("HELL_AUTOMATION_RELEASE_BUILD", releaseBuildProbe),
-            ("HELL_AUTOMATION_RELEASE_CONTROL", releaseControlProbe)
-          ]
-    let hostile =
-          ["space value", "--leading", "*", "$(literal)", "semi;colon", "line\nbreak"]
-    Monad.forM_
-      [ ("policy", "checks"), ("metadata", "checks"),
-        ("hpack-drift", "checks"), ("check-sdist", "checks"),
-        ("generate-docs", "checks"), ("check-docs", "checks"),
-        ("nix-check", "checks"),
-        ("check-runtime", "release-build"), ("check-bundle", "release-build"),
-        ("nix-release", "release-build"),
-        ("aggregate", "release-control"), ("stage-draft", "release-control"),
-        ("verify-published", "release-control")
-      ]
-      \(command, marker) -> do
-        process <-
-          Main.withEnvironment
-            overrides
-            (Process.proc automation ([command] <> hostile))
-        Main.expectForwarded
-          process
-          marker
-          ([command] <> hostile)
-          (Text.concat ["dispatcher changed arguments for ", command])
-    unknown <- Main.withEnvironment overrides (Process.proc automation ["unknown"])
-    Main.expectFailure unknown "dispatcher accepted an unknown command"
-  releaseControl <- Main.env "HELL_AUTOMATION_RELEASE_CONTROL_IMAGE"
-  Maybe.maybe
-    (IO.pure ())
-    (\releaseControlPath ->
-      Temp.withSystemTempDirectory "hell-runtime-delegation" \temporary -> do
-        failingPeer <- Main.compileFailingRuntimePeer product temporary
-        let logPath = Main.joinPath temporary "runtime.log"
-        process <-
-          Main.withEnvironment
-            [ ("HELL_AUTOMATION_TEST_DELEGATION", "enabled"),
-              ("HELL_AUTOMATION_RELEASE_BUILD", failingPeer),
-              ("FAKE_RUNTIME_LOG", logPath)
-            ]
-            (Process.proc
-              releaseControlPath
-              ["test-runtime-delegation", "binary value", "aarch64"])
-        Main.expectFailure process "release-control accepted a failing runtime peer"
-        logged <- Text.readFile logPath
-        Main.assert
-          (Eq.eq (Text.lines logged) ["check-runtime", "binary value", "aarch64"])
-          "release-control changed runtime peer arguments")
-    releaseControl
   if Eq.eq (Maybe.maybe "" Function.id mode) "hpack-drift"
     then do
       hpackTool <- Main.env "HELL_TOOL_HPACK"
@@ -240,6 +177,83 @@ acceptance = \automation product sourceRoot -> do
           (Maybe.maybe Bool.True (\_path -> Bool.False) copyTool)
           "source-distribution check captured HELL_TOOL_CP"
       else IO.pure ()
+
+modeEnvironmentFromEnvironment = do
+  automation <- Main.env "HELL_AUTOMATION"
+  sourceRoot <- Main.env "SOURCE_ROOT"
+  Maybe.maybe
+    (Exit.die "mode-environment requires HELL_AUTOMATION")
+    (\automationPath ->
+      Maybe.maybe
+        (Exit.die "mode-environment requires SOURCE_ROOT")
+        (Main.modeEnvironment automationPath)
+        sourceRoot)
+    automation
+
+acceptance = \automation product sourceRoot -> do
+  findTool <- Main.env "HELL_TOOL_FIND"
+  statTool <- Main.env "HELL_TOOL_STAT"
+  staticBinary <- Main.env "HELL_STATIC_BINARY"
+  let findPath = Maybe.maybe "find" Function.id findTool
+  let statPath = Maybe.maybe "stat" Function.id statTool
+  Main.assert
+    (Maybe.maybe Bool.True (\_path -> Bool.False) staticBinary)
+    "generic automation check captured the static release binary"
+  Temp.withSystemTempDirectory "hell-dispatch" \temporary -> do
+    checksProbe <- Main.compileDispatchProbe product temporary "checks"
+    releaseBuildProbe <- Main.compileDispatchProbe product temporary "release-build"
+    releaseControlProbe <- Main.compileDispatchProbe product temporary "release-control"
+    let overrides =
+          [ ("HELL_AUTOMATION_CHECKS", checksProbe),
+            ("HELL_AUTOMATION_RELEASE_BUILD", releaseBuildProbe),
+            ("HELL_AUTOMATION_RELEASE_CONTROL", releaseControlProbe)
+          ]
+    let hostile =
+          ["space value", "--leading", "*", "$(literal)", "semi;colon", "line\nbreak"]
+    Monad.forM_
+      [ ("policy", "checks"), ("metadata", "checks"),
+        ("hpack-drift", "checks"), ("check-sdist", "checks"),
+        ("generate-docs", "checks"), ("check-docs", "checks"),
+        ("nix-check", "checks"),
+        ("check-runtime", "release-build"), ("check-bundle", "release-build"),
+        ("nix-release", "release-build"),
+        ("aggregate", "release-control"), ("stage-draft", "release-control"),
+        ("verify-published", "release-control")
+      ]
+      \(command, marker) -> do
+        process <-
+          Main.withEnvironment
+            overrides
+            (Process.proc automation ([command] <> hostile))
+        Main.expectForwarded
+          process
+          marker
+          ([command] <> hostile)
+          (Text.concat ["dispatcher changed arguments for ", command])
+    unknown <- Main.withEnvironment overrides (Process.proc automation ["unknown"])
+    Main.expectFailure unknown "dispatcher accepted an unknown command"
+  releaseControl <- Main.env "HELL_AUTOMATION_RELEASE_CONTROL_IMAGE"
+  Maybe.maybe
+    (IO.pure ())
+    (\releaseControlPath ->
+      Temp.withSystemTempDirectory "hell-runtime-delegation" \temporary -> do
+        failingPeer <- Main.compileFailingRuntimePeer product temporary
+        let logPath = Main.joinPath temporary "runtime.log"
+        process <-
+          Main.withEnvironment
+            [ ("HELL_AUTOMATION_TEST_DELEGATION", "enabled"),
+              ("HELL_AUTOMATION_RELEASE_BUILD", failingPeer),
+              ("FAKE_RUNTIME_LOG", logPath)
+            ]
+            (Process.proc
+              releaseControlPath
+              ["test-runtime-delegation", "binary value", "aarch64"])
+        Main.expectFailure process "release-control accepted a failing runtime peer"
+        logged <- Text.readFile logPath
+        Main.assert
+          (Eq.eq (Text.lines logged) ["check-runtime", "binary value", "aarch64"])
+          "release-control changed runtime peer arguments")
+    releaseControl
   Temp.withSystemTempDirectory "hell-cache-policy-negative" \temporary -> do
     let githubDirectory = Main.joinPath temporary ".github"
     let workflowDirectory = Main.joinPath githubDirectory "workflows"
@@ -764,8 +778,7 @@ acceptance = \automation product sourceRoot -> do
       Main.assert (Bool.not (Text.isInfixOf mutation publishedLog))
         "published verifier attempted a mutating GitHub operation"
 
-main = do
-  arguments <- Environment.getArgs
+fullAcceptance = \arguments -> do
   let lowercaseCommit = "0123456789abcdef0123456789abcdef01234567"
   let commitWidth = Text.length lowercaseCommit
   Main.assert
@@ -835,3 +848,9 @@ main = do
         product)
     automation
   Text.putStrLn "hell automation argv tests passed"
+
+main = do
+  arguments <- Environment.getArgs
+  if Eq.eq arguments ["mode-environment"]
+    then Main.modeEnvironmentFromEnvironment
+    else Main.fullAcceptance arguments

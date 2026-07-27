@@ -187,6 +187,35 @@ rawAccessTokenLineSafe = \line ->
 shellProgramPath = \path ->
   List.or [Text.isSuffixOf ".sh" path, Text.isSuffixOf ".bash" path]
 
+nativeFlakeCheck =
+  "nix flake check --max-jobs 1 --no-update-lock-file --print-build-logs"
+
+standaloneNativeCheckCommands =
+  [ "nix build --dry-run --no-update-lock-file .#checks.x86_64-linux.hpack-drift",
+    "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.hpack-drift",
+    "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution",
+    "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.documentation"
+  ]
+
+workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
+  List.and
+    [ Eq.eq
+        (List.length (Text.splitOn Main.nativeFlakeCheck mainWorkflow))
+        2,
+      Eq.eq
+        (List.length (Text.splitOn Main.nativeFlakeCheck releaseWorkflow))
+        2,
+      List.and
+        (List.map
+          (\command ->
+            Bool.not
+              (Text.isInfixOf command (Text.concat [mainWorkflow, releaseWorkflow])))
+          Main.standaloneNativeCheckCommands),
+      Text.isInfixOf
+        "  documentation:\n    name: validate exact tagged documentation\n    runs-on: ubuntu-24.04"
+        verifyWorkflow
+    ]
+
 assertCacheHost = \repositories -> do
   Monad.forM_
     [ "GITHUB_TOKEN", "GH_TOKEN", "INPUT_GITHUB_ACCESS_TOKEN",
@@ -227,7 +256,9 @@ assertCacheHost = \repositories -> do
 activeCachePolicyValid =
   \flake mainWorkflow releaseWorkflow verifyWorkflow requestWorkflow cacheWorkflow ->
   List.and
-    [ Main.sameCount "github_access_token:" "fallback = true" mainWorkflow,
+    [ Main.workflowOptimizationPolicyValid
+        mainWorkflow releaseWorkflow verifyWorkflow,
+      Main.sameCount "github_access_token:" "fallback = true" mainWorkflow,
       Main.sameCount "github_access_token:" "fallback = true" releaseWorkflow,
       Main.sameCount "github_access_token:" "fallback = true" verifyWorkflow,
       Main.sameCount "github_access_token:" Main.cacheSubstituter mainWorkflow,
@@ -390,8 +421,8 @@ activeCachePolicyValid =
         (Text.strip cacheWorkflow),
       Bool.not (Text.isInfixOf "secrets.CACHIX" requestWorkflow),
       Bool.not (Text.isInfixOf "github.event.workflow_run.head_sha }}#cache" cacheWorkflow),
-      Eq.eq (List.length (Text.splitOn "allowSubstitutes = false;" flake)) 4,
-      Eq.eq (List.length (Text.splitOn "preferLocalBuild = true;" flake)) 4,
+      Eq.eq (List.length (Text.splitOn "allowSubstitutes = false;" flake)) 5,
+      Eq.eq (List.length (Text.splitOn "preferLocalBuild = true;" flake)) 5,
       Bool.not (Text.isInfixOf "hell-ci-cache-seed-v1-${system}" flake),
       Bool.not (Text.isInfixOf "\n        cacheSeed =" flake),
       Text.isInfixOf "cache-client = pkgs.cachix;" flake,
@@ -491,6 +522,9 @@ forbiddenCacheSelectors = \system ->
         (".#packages.x86_64-linux.release-static-native.outPath",
          ".#packages.x86_64-linux.release-static-native.allowSubstitutes",
          ".#packages.x86_64-linux.release-static-native.preferLocalBuild"),
+        (".#checks.x86_64-linux.automation-acceptance.outPath",
+         ".#checks.x86_64-linux.automation-acceptance.allowSubstitutes",
+         ".#checks.x86_64-linux.automation-acceptance.preferLocalBuild"),
         (".#checks.x86_64-linux.automation.outPath",
          ".#checks.x86_64-linux.automation.allowSubstitutes",
          ".#checks.x86_64-linux.automation.preferLocalBuild"),
@@ -530,6 +564,9 @@ forbiddenCacheSelectors = \system ->
           (".#packages.aarch64-linux.release-static-native.outPath",
            ".#packages.aarch64-linux.release-static-native.allowSubstitutes",
            ".#packages.aarch64-linux.release-static-native.preferLocalBuild"),
+          (".#checks.aarch64-linux.automation-acceptance.outPath",
+           ".#checks.aarch64-linux.automation-acceptance.allowSubstitutes",
+           ".#checks.aarch64-linux.automation-acceptance.preferLocalBuild"),
           (".#checks.aarch64-linux.automation.outPath",
            ".#checks.aarch64-linux.automation.allowSubstitutes",
            ".#checks.aarch64-linux.automation.preferLocalBuild"),
@@ -735,6 +772,56 @@ checkPolicy = do
   Main.require
     (Main.staticBinaryPlacementValid flake)
     "HELL_STATIC_BINARY must be confined to releaseStaticNative"
+  Main.require
+    (Main.workflowOptimizationPolicyValid
+      mainWorkflow releaseWorkflow verifyWorkflow)
+    "workflow check deduplication policy differs"
+  Main.require
+    (Bool.not
+      (Main.workflowOptimizationPolicyValid
+        (Text.replace Main.nativeFlakeCheck "/usr/bin/true" mainWorkflow)
+        releaseWorkflow
+        verifyWorkflow))
+    "workflow policy accepted main without its native flake check"
+  Main.require
+    (Bool.not
+      (Main.workflowOptimizationPolicyValid
+        mainWorkflow
+        (Text.replace Main.nativeFlakeCheck "/usr/bin/true" releaseWorkflow)
+        verifyWorkflow))
+    "workflow policy accepted release without its native flake check"
+  Main.require
+    (Bool.not
+      (Main.workflowOptimizationPolicyValid
+        (Text.concat
+          [ mainWorkflow,
+            "\n",
+            "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.hpack-drift"
+          ])
+        releaseWorkflow
+        verifyWorkflow))
+    "workflow policy accepted a standalone main hpack check"
+  Main.require
+    (Bool.not
+      (Main.workflowOptimizationPolicyValid
+        mainWorkflow
+        (Text.concat
+          [ releaseWorkflow,
+            "\n",
+            "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution"
+          ])
+        verifyWorkflow))
+    "workflow policy accepted a standalone release source-distribution check"
+  Main.require
+    (Bool.not
+      (Main.workflowOptimizationPolicyValid
+        mainWorkflow
+        releaseWorkflow
+        (Text.replace
+          "  documentation:\n    name: validate exact tagged documentation\n    runs-on: ubuntu-24.04"
+          "  documentation:\n    name: validate exact tagged documentation\n    needs: verify\n    runs-on: ubuntu-24.04"
+          verifyWorkflow)))
+    "workflow policy accepted serialized published-documentation verification"
   Main.require
     (Main.activeCachePolicyValid
       flake mainWorkflow releaseWorkflow verifyWorkflow requestWorkflow cacheWorkflow)
@@ -1044,7 +1131,7 @@ nixCheck = do
   source <- Main.envAlias "SOURCE_ROOT" "sourceRoot"
   Directory.setCurrentDirectory source
   tests <- Main.env "HELL_AUTOMATION_TESTS"
-  Main.run tests ["space value", "--leading", "*", "$(literal)", "semi;colon"]
+  Main.run tests ["mode-environment"]
   mode <- Main.envDefault "HELL_CHECK_MODE" "metadata"
   if Eq.eq mode "policy" then Main.checkPolicy
   else if Eq.eq mode "metadata" then Main.checkMetadata
@@ -1052,6 +1139,14 @@ nixCheck = do
   else if Eq.eq mode "check-sdist" then Main.checkSdist
   else if Eq.eq mode "check-docs" then Main.checkDocs
   else Main.die "unknown HELL_CHECK_MODE"
+  output <- Main.env "out"
+  Text.writeFile output "ok\n"
+
+nixAcceptance = do
+  source <- Main.envAlias "SOURCE_ROOT" "sourceRoot"
+  Directory.setCurrentDirectory source
+  tests <- Main.env "HELL_AUTOMATION_TESTS"
+  Main.run tests ["space value", "--leading", "*", "$(literal)", "semi;colon"]
   output <- Main.env "out"
   Text.writeFile output "ok\n"
 
@@ -1079,5 +1174,6 @@ main = do
     Main.require (List.elem count [1,3])
       "assert-cache-host accepts either no repository or trusted and request"
     Main.assertCacheHost (List.drop 1 arguments)
+  else if Eq.eq command "nix-acceptance" then Main.nixAcceptance
   else if Eq.eq command "nix-check" then Main.nixCheck
   else Main.die "usage: hell-automation checks command"

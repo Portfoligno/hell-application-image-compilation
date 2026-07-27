@@ -269,8 +269,6 @@
             HELL_CHECK_MODE = mode;
             HELL_AUTOMATION_TESTS = hellAutomationTests;
             HELL_AUTOMATION = hellAutomation;
-            HELL_AUTOMATION_RELEASE_CONTROL_IMAGE = hellAutomationReleaseControl;
-            HELL_PRODUCT_BINARY = pkgs.lib.getExe' app "hell";
             HELL_TARGET_ARCH = releaseArch;
             SOURCE_ROOT = ./.;
             HELL_VERSIONS_FILE = ./release/versions.json;
@@ -301,6 +299,32 @@
             HELL_TOOL_TIMEOUT = pkgs.lib.getExe' pkgs.coreutils "timeout";
             HELL_TOOL_TAR = pkgs.lib.getExe' pkgs.gnutar "tar";
           });
+        automationAcceptance =
+          builtins.derivation {
+            inherit system;
+            name = "hell-automation-acceptance-${system}";
+            allowSubstitutes = false;
+            preferLocalBuild = true;
+            builder = hellAutomationChecks;
+            args = [ "nix-acceptance" ];
+            HELL_AUTOMATION_TESTS = hellAutomationTests;
+            HELL_AUTOMATION = hellAutomation;
+            HELL_AUTOMATION_RELEASE_CONTROL_IMAGE = hellAutomationReleaseControl;
+            HELL_PRODUCT_BINARY = pkgs.lib.getExe' app "hell";
+            SOURCE_ROOT = ./.;
+            HELL_TOOL_FIND = pkgs.lib.getExe' pkgs.findutils "find";
+            HELL_TOOL_STAT = pkgs.lib.getExe' pkgs.coreutils "stat";
+            PATH = pkgs.lib.makeBinPath [
+              app
+              pkgs.cabal-install
+              pkgs.coreutils
+              pkgs.git
+              pkgs.gzip
+              pkgs.gnutar
+              pkgs.haskellPackages.hpack
+              pkgs.pandoc
+            ];
+          };
 
         releaseStaticNative =
           builtins.derivation {
@@ -355,6 +379,7 @@
         };
 
         checks = {
+          automation-acceptance = automationAcceptance;
           automation =
             mkAutomationCheck "automation" "policy" hellAutomationChecks;
           metadata =

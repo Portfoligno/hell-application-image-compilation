@@ -40,14 +40,6 @@ jobs:
         run: ./result-automation-checks policy
       - name: Check fixed release metadata
         run: ./result-automation-checks metadata --check
-      - name: Show exact hpack dependency plan
-        run: nix build --dry-run --no-update-lock-file .#checks.x86_64-linux.hpack-drift
-      - name: Check exact hpack output
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.hpack-drift
-      - name: Check source distribution
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution
-      - name: Check generated documentation
-        run: nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.documentation
 
   test:
     name: test (${{ matrix.system }})
@@ -83,8 +75,6 @@ jobs:
             filetransfer-retry-attempts = 2
       - name: Evaluate locked flake metadata
         run: nix flake metadata --no-update-lock-file
-      - name: Show native cache and build plan
-        run: nix build --dry-run --no-update-lock-file .#release-static-native
       - name: Run all native checks
         run: nix flake check --max-jobs 1 --no-update-lock-file --print-build-logs
       - name: Build native static release candidate
