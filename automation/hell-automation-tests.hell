@@ -285,6 +285,7 @@ acceptance = \automation product sourceRoot -> do
       Text.readFile (Main.joinPath workflowDirectory "cache-request.yml")
     mainWorkflow <- Text.readFile (Main.joinPath workflowDirectory "main.yml")
     releaseWorkflow <- Text.readFile (Main.joinPath workflowDirectory "release.yml")
+    verifyWorkflow <- Text.readFile (Main.joinPath workflowDirectory "verify-published.yml")
     flake <- Text.readFile (Main.joinPath temporary "flake.nix")
     positive <- Main.withEnvironment
       [("HELL_TOOL_FIND", findPath), ("HELL_TOOL_STAT", statPath)]
@@ -464,6 +465,27 @@ acceptance = \automation product sourceRoot -> do
         mainWorkflow)
       findPath statPath
       "policy accepted global substitution of protected CI leaves"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/main.yml" mainWorkflow
+      (Text.replace "          fetch-depth: 0\n" "" mainWorkflow)
+      findPath statPath
+      "policy accepted tag metadata without main history"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/release.yml" releaseWorkflow
+      (Text.replace
+        "      - \"1.0.0_hell-2026-05-29\"\n"
+        "      - \"other\"\n"
+        releaseWorkflow)
+      findPath statPath
+      "policy accepted a different release tag trigger"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/verify-published.yml" verifyWorkflow
+      (Text.replace
+        "          ref: \"1.0.0_hell-2026-05-29\"\n"
+        "          ref: \"other\"\n"
+        verifyWorkflow)
+      findPath statPath
+      "policy accepted different publication verification refs"
     Main.expectPolicyMutationFailure
       automation temporary ".github/workflows/cache.yml" cacheWorkflow
       (Text.replace

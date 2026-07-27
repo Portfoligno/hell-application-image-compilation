@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "application-image-compilation/v*"
+      - "1.0.0_hell-2026-05-29"
 
 concurrency:
   group: release-${{ github.ref }}

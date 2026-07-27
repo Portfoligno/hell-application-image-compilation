@@ -36,7 +36,7 @@ Verify downloaded assets with:
 ```text
 sha256sum --check SHA256SUMS
 gh attestation verify <archive> -R Portfoligno/hell-application-image-compilation
-gh release verify application-image-compilation/v1.0.0 \
+gh release verify 1.0.0_hell-2026-05-29 \
   -R Portfoligno/hell-application-image-compilation
 ```
 

@@ -118,7 +118,7 @@ main = do
   commit <- Main.stringField "commit" trustFields
   let expectedArch = if Eq.eq runnerArch "X64" then "x86_64" else "aarch64"
   Main.require (Eq.eq repository "Portfoligno/hell-application-image-compilation") "wrong repository"
-  Main.require (Eq.eq tag "application-image-compilation/v1.0.0") "wrong tag"
+  Main.require (Eq.eq tag "1.0.0_hell-2026-05-29") "wrong tag"
   Main.require (Eq.eq trustArch runnerArch) "runner/trust architecture mismatch"
   Main.require (Main.lowerHex commitWidth commit) "invalid tagged commit"
   Main.require (Eq.eq expectedVersion "Hell 2026-05-29 — Application Image Compilation 1.0.0") "wrong public identity"

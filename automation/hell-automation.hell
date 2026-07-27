@@ -43,11 +43,13 @@ defaultReleaseControlImage =
     then "automation/hell-automation-release-control.hell"
     else Main.substitutedReleaseControlImage
 
-fixedTag = "application-image-compilation/v1.0.0"
+fixedTag = "1.0.0_hell-2026-05-29"
 
 selfTest = do
   Main.require (Eq.eq (Main.joinPath "a/" "b") "a/b") "path join failed"
-  Main.require (Eq.eq Main.fixedTag "application-image-compilation/v1.0.0") "tag policy failed"
+  Main.require
+    (Eq.eq Main.fixedTag "1.0.0_hell-2026-05-29")
+    "tag policy failed"
   Text.putStrLn "hell automation self-test passed"
 
 usage =

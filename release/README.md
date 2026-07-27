@@ -8,7 +8,7 @@ Before the first release, repository owners must:
 
 1. protect `main` and require `metadata`, `test (x86_64-linux)`, and
    `test (aarch64-linux)`;
-2. protect `application-image-compilation/v*` against unauthorized creation,
+2. protect `1.0.0_hell-2026-05-29` against unauthorized creation,
    update, and deletion;
 3. enable immutable GitHub releases;
 4. restrict allowed Actions to the full-SHA-pinned actions used by this
@@ -19,9 +19,27 @@ Before the first release, repository owners must:
 The protected tag workflow validates the tag, builds and tests both native
 Linux architectures, creates the exact six assets, attests them, and creates
 or verifies a draft release. It never publishes the release. A maintainer
-reviews the draft and uses the Releases page **Publish release** button.
-Publication starts a separate read-only verification workflow; that workflow
-may report a failure but cannot edit, delete, replace, or republish anything.
+reviews the draft, explicitly selects **Set as latest release**, and uses the
+Releases page **Publish release** button. After publication, the maintainer
+confirms the release displays GitHub's **Latest** badge. Publication starts a
+separate read-only verification workflow; that workflow may report a failure
+but cannot edit, delete, replace, or republish anything.
+
+Release tags use `<AIC-SemVer>_hell-<Hell-YYYY-MM-DD>`. This is a composite
+two-axis identifier, not SemVer, so release chronology and GitHub's latest
+release must not be inferred by SemVer-ordering tags. The explicit latest
+selection above is part of the operator gate, not a second approval gate. For
+example, if Hell's next actual upstream version were hypothetically
+`2026-06-12`:
+
+- upstream-only: `1.0.0_hell-2026-06-12`;
+- feature-only: `1.1.0_hell-2026-05-29`;
+- combined: `1.1.0_hell-2026-06-12`.
+
+The same Application Image Compilation version and Hell version always produce
+the same tag. There is no revision or counter, and publication requires at
+least one axis to advance. A correction on an unchanged Hell version therefore
+bumps the feature patch version.
 
 The consumer setup action is supported only after the first release has been
 published, its architecture-specific archive and executable digests have been
@@ -38,7 +56,8 @@ remain the audit record.
 For an ordinary defect:
 
 1. mark the bad release not-latest and add a prominent supersession notice;
-2. prepare a corrected, monotonically newer feature release;
+2. prepare a corrected release with a new tag, advancing the affected
+   upstream and/or feature axis;
 3. run every native, metadata, documentation, checksum, SBOM, and attestation
    gate again; and
 4. publish the new immutable release and point users to it.

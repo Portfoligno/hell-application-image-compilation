@@ -1,7 +1,7 @@
 # Reviewed trust data
 
 This directory is intentionally unpinned before the first immutable
-`application-image-compilation/v1.0.0` publication. Do not add zeroes,
+`1.0.0_hell-2026-05-29` publication. Do not add zeroes,
 examples, dummy hashes, or selectable fallback values.
 
 The required files and review chronology are documented in the parent

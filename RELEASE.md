@@ -11,7 +11,7 @@ Hackage as part of the 1.0.0 release.
 - Feature/package version: `1.0.0`
 - Cabal package: `hell-application-image-compilation`
 - Executable: `hell`
-- Git tag: `application-image-compilation/v1.0.0`
+- Git tag: `1.0.0_hell-2026-05-29`
 - Release title:
   `Hell 2026-05-29 — Application Image Compilation 1.0.0`
 - Artifact stem:
@@ -21,6 +21,27 @@ The feature version must never be appended to the upstream baseline. These are
 separate version axes: the date identifies the unchanged upstream
 language/runtime baseline, while Application Image Compilation identifies and
 versions the definitive feature difference.
+
+Release tags use the two-axis grammar
+`<AIC-SemVer>_hell-<Hell-YYYY-MM-DD>`. The current tag is therefore
+`1.0.0_hell-2026-05-29`. The composite tag is deliberately not SemVer:
+GitHub release chronology and the latest release must not be inferred by
+SemVer-ordering these tags.
+
+Both axes participate in the immutable tag identity:
+
+- if Hell's next actual upstream version were hypothetically `2026-06-12`,
+  an upstream-only release would use `1.0.0_hell-2026-06-12`;
+- a hypothetical feature-only release would use
+  `1.1.0_hell-2026-05-29`;
+- if both hypothetical changes occurred, the tag would be
+  `1.1.0_hell-2026-06-12`.
+
+The mapping is deterministic: the same Application Image Compilation version
+and Hell version always yield the same tag. There is no revision or counter,
+and no new release may be minted without advancing at least one axis. A
+correction that retains the Hell version must therefore bump the feature
+version, normally its patch component.
 
 ## Release gates
 
@@ -51,9 +72,13 @@ all of these gates pass on the exact commit to be tagged:
 13. Let tag CI create or verify the exact draft and its attestations. The
     workflow must stop while the release remains a draft.
 14. Review the fork-specific notes, exact six assets, checksums, SBOMs,
-    attestations, and tagged documentation, then use the Releases page
-    **Publish release** button.
-15. Require the separate read-only publication-verification workflow to pass.
+    attestations, and tagged documentation. In the Releases page, explicitly
+    select **Set as latest release**, then use **Publish release**. This
+    first reviewed release is intended to be latest; do not let GitHub infer
+    that status from the composite tag.
+15. After publication, confirm the release displays GitHub's **Latest** badge
+    and require the separate read-only publication-verification workflow to
+    pass.
 
 The first release is built from the locked Nix source closure because a release
 cannot bootstrap from its own not-yet-published binaries. The repository setup
@@ -80,7 +105,7 @@ If a published release is found to be defective:
 3. Fix forward with a new feature/package version, a new tag, new artifact
    names, and a new `release.json`. For example, a correction to 1.0.0 is
    released as Application Image Compilation `1.0.1` under
-   `application-image-compilation/v1.0.1`; the original 1.0.0 tag is not
+   `1.0.1_hell-2026-05-29`; the original `1.0.0_hell-2026-05-29` tag is not
    changed. The upstream Hell baseline remains `2026-05-29` unless the new
    release intentionally adopts a different upstream baseline.
 4. Link the withdrawn release to its replacement and state in the replacement

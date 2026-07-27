@@ -4,7 +4,7 @@ The canonical release identity is defined in `release/versions.json`.
 
 Official release tag:
 
-    application-image-compilation/v1.0.0
+    1.0.0_hell-2026-05-29
 
 Official release repository:
 
@@ -33,11 +33,25 @@ Consumer verification:
 
     sha256sum --check SHA256SUMS
     gh attestation verify <archive> -R Portfoligno/hell-application-image-compilation
-    gh release verify application-image-compilation/v1.0.0 \
+    gh release verify 1.0.0_hell-2026-05-29 \
       -R Portfoligno/hell-application-image-compilation
 
 Repository owners must enable immutable releases, protect `main`, restrict
-creation/update/deletion of `application-image-compilation/v*` tags, require
+creation/update/deletion of the `1.0.0_hell-2026-05-29` tag, require
 the `metadata`, `test (x86_64-linux)`, and `test (aarch64-linux)` checks, and
 configure Pages for GitHub Actions. No Actions `release` environment is used:
 only a maintainer may publish a reviewed draft from the Releases page.
+
+Tags use `<AIC-SemVer>_hell-<Hell-YYYY-MM-DD>` and are not SemVer. If Hell's
+next actual upstream version were hypothetically `2026-06-12`, an upstream-only
+change would use `1.0.0_hell-2026-06-12`; a hypothetical feature-only change
+would use `1.1.0_hell-2026-05-29`; and a hypothetical combined change would use
+`1.1.0_hell-2026-06-12`. The same pair of axis values always yields the same
+tag: there is no revision or counter, and a new release requires at least one
+axis to advance. An unchanged Hell version therefore requires a feature
+version bump. Do not infer release chronology or GitHub's latest release from
+SemVer ordering of these composite tags. For this first release, the
+maintainer must explicitly select **Set as latest release** before **Publish
+release**, then confirm the published release displays GitHub's **Latest**
+badge. This is part of the existing publication operation, not a second
+approval gate.

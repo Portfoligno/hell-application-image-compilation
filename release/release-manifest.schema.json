@@ -30,7 +30,8 @@
       "type": "string"
     },
     "tag": {
-      "const": "application-image-compilation/v1.0.0"
+      "description": "Immutable, deterministic <AIC-SemVer>_hell-<Hell-YYYY-MM-DD> composite tag; this identifier is not SemVer. The same two axis values always yield the same tag, there is no revision or counter, and a new release requires at least one axis to advance.",
+      "const": "1.0.0_hell-2026-05-29"
     },
     "release": {
       "type": "object",

@@ -31,7 +31,7 @@ main = do
           [ "{\"body\":", body,
             ",\"isDraft\":", if Eq.eq mode "published" then "false" else "true",
             ",\"name\":\"Hell 2026-05-29 — Application Image Compilation 1.0.0\"",
-            ",\"tagName\":\"application-image-compilation/v1.0.0\"",
+            ",\"tagName\":\"1.0.0_hell-2026-05-29\"",
             ",\"targetCommitish\":\"", commit, "\"}"
           ])
     else if List.and [Eq.eq family "release", Eq.eq operation "download"]

@@ -131,7 +131,7 @@ argument = \position values ->
     (Maybe.listToMaybe (List.drop position values))
 
 fixedVersion = "Hell 2026-05-29 — Application Image Compilation 1.0.0"
-fixedTag = "application-image-compilation/v1.0.0"
+fixedTag = "1.0.0_hell-2026-05-29"
 fixedRepository = "Portfoligno/hell-application-image-compilation"
 fullCommitWidth = Text.length "0000000000000000000000000000000000000000"
 x86Archive = "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz"

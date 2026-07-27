@@ -129,7 +129,7 @@ staticBinaryPlacementValid = \source ->
             (List.drop 1 (Text.splitOn "releaseStaticNative =" source))))
     ]
 
-fixedTag = "application-image-compilation/v1.0.0"
+fixedTag = "1.0.0_hell-2026-05-29"
 fixedRepository = "Portfoligno/hell-application-image-compilation"
 cacheName = "hell-app-image-compilation"
 cachePublicKey =
@@ -196,6 +196,29 @@ standaloneNativeCheckCommands =
     "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.source-distribution",
     "nix build --max-jobs 1 --no-update-lock-file --print-build-logs .#checks.x86_64-linux.documentation"
   ]
+
+tagMetadataCheckoutPolicyValid = \mainWorkflow releaseWorkflow ->
+  List.and
+    [ Text.isInfixOf
+        "      - name: Check out source\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - name: Install Nix"
+        mainWorkflow,
+      Text.isInfixOf
+        "      - name: Check out annotated release tag\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - name: Install Nix"
+        releaseWorkflow
+    ]
+
+releaseTagPolicyValid = \releaseWorkflow verifyWorkflow ->
+  List.and
+    [ Text.isInfixOf
+        "on:\n  push:\n    tags:\n      - \"1.0.0_hell-2026-05-29\"\n\nconcurrency:"
+        releaseWorkflow,
+      Eq.eq
+        (List.length
+          (Text.splitOn
+            "          ref: \"1.0.0_hell-2026-05-29\"\n"
+            verifyWorkflow))
+        3
+    ]
 
 workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
   List.and
@@ -777,6 +800,36 @@ checkPolicy = do
       mainWorkflow releaseWorkflow verifyWorkflow)
     "workflow check deduplication policy differs"
   Main.require
+    (Main.tagMetadataCheckoutPolicyValid mainWorkflow releaseWorkflow)
+    "tag metadata checkouts must provide complete main history"
+  Main.require
+    (Main.releaseTagPolicyValid releaseWorkflow verifyWorkflow)
+    "release workflows must use only the reviewed tag"
+  Main.require
+    (Bool.not
+      (Main.releaseTagPolicyValid
+        (Text.replace
+          "      - \"1.0.0_hell-2026-05-29\"\n"
+          "      - \"other\"\n"
+          releaseWorkflow)
+        verifyWorkflow))
+    "workflow policy accepted a different release tag trigger"
+  Main.require
+    (Bool.not
+      (Main.releaseTagPolicyValid
+        releaseWorkflow
+        (Text.replace
+          "          ref: \"1.0.0_hell-2026-05-29\"\n"
+          "          ref: \"other\"\n"
+          verifyWorkflow)))
+    "workflow policy accepted different publication verification refs"
+  Main.require
+    (Bool.not
+      (Main.tagMetadataCheckoutPolicyValid
+        (Text.replace "          fetch-depth: 0\n" "" mainWorkflow)
+        releaseWorkflow))
+    "workflow policy accepted tag metadata without main history"
+  Main.require
     (Bool.not
       (Main.workflowOptimizationPolicyValid
         (Text.replace Main.nativeFlakeCheck "/usr/bin/true" mainWorkflow)
@@ -877,7 +930,7 @@ checkMetadata = do
     [ "\"version\": \"2026-05-29\"",
       "\"name\": \"Application Image Compilation\"",
       "\"version\": \"1.0.0\"",
-      "\"tag\": \"application-image-compilation/v1.0.0\"",
+      "\"tag\": \"1.0.0_hell-2026-05-29\"",
       "\"artifactStem\": \"hell-application-image-compilation-1.0.0-hell-2026-05-29\""
     ]
     \required -> Main.requireText required versions "release identity metadata is stale"
@@ -914,7 +967,7 @@ checkMetadata = do
       tagType <- Main.capture gitTool ["cat-file", "-t", refName]
       Main.require (Eq.eq (Text.strip tagType) "tag") "release tag must be annotated"
       peeled <- Main.capture gitTool
-        ["rev-parse", "application-image-compilation/v1.0.0^{}"]
+        ["rev-parse", "1.0.0_hell-2026-05-29^{}"]
       Main.require (Eq.eq (Text.length (Text.strip peeled)) Main.fullCommitWidth) "tag does not peel to a full commit"
       Main.run gitTool ["merge-base", "--is-ancestor", Text.strip peeled, "origin/main"]
     else IO.pure ()

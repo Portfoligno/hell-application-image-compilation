@@ -1,7 +1,7 @@
 # Setup Hell bootstrap
 
 This composite action installs exactly
-`application-image-compilation/v1.0.0` for native Linux X64 and ARM64
+`1.0.0_hell-2026-05-29` for native Linux X64 and ARM64
 runners. It has no caller-selectable version, URL, digest, member, or install
 location.
 
