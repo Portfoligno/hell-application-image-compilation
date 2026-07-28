@@ -1,7 +1,4 @@
 .github/CONTRIBUTING.md
-.github/actions/setup-hell/action.yml
-.github/actions/setup-hell/programs/publish-setup.hell
-.github/actions/setup-hell/programs/validate-bootstrap.hell
 CHANGELOG.md
 FORK.md
 LICENSE

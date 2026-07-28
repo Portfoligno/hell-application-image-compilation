@@ -22,8 +22,6 @@ extra-source-files:
 - release/*.md
 - release/sdist-files.txt
 - automation/*.hell
-- .github/actions/setup-hell/programs/*.hell
-- .github/actions/setup-hell/action.yml
 - test/automation/*.hell
 - test/fixtures/application-image-compilation/*.hell
 extra-doc-files:

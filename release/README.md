@@ -61,11 +61,8 @@ the same tag. There is no revision or counter, and publication requires at
 least one axis to advance. A correction on an unchanged Hell version therefore
 bumps the feature patch version.
 
-The consumer setup action is supported only after the first release has been
-published, its architecture-specific archive and executable digests have been
-reviewed into the action trust data, and read-only publication verification
-has passed. The first release is bootstrapped from the locked Nix source
-closure; it cannot download the release that it is in the process of creating.
+The first release is bootstrapped from the locked Nix source closure; it cannot
+download the release that it is in the process of creating.
 
 ## Bad-release recovery
 

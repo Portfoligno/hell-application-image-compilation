@@ -208,7 +208,6 @@ staticBinaryPlacementValid = \source ->
 
 fixedTag = "1.0.0_hell-2026-05-29"
 fixedRepository = "Portfoligno/hell-application-image-compilation"
-cacheName = "hell-app-image-compilation"
 cachePublicKey =
   "hell-app-image-compilation.cachix.org-1:OLLZe3quWexZQiUZpUIsAXMA3qqnivZELoJA32ch+PE="
 cacheSubstituter =
@@ -475,7 +474,7 @@ releaseCandidateTrustPolicyValid = \checks ->
     ]
 
 publishedReleaseTrustPolicyValid =
-  \verifyWorkflow releaseControl versions versionsSchema setupBootstrap ->
+  \verifyWorkflow releaseControl versions versionsSchema ->
   List.and
     [ Text.isInfixOf
         "  release:\n    types:\n      - published\n  workflow_dispatch:"
@@ -594,16 +593,7 @@ publishedReleaseTrustPolicyValid =
         versionsSchema,
       Text.isInfixOf
         "\"releaseAttestationRequired\": {\n              \"const\": false\n            }"
-        versionsSchema,
-      Text.isInfixOf
-        "releaseAttestationRequired = \\tag ->\n  Bool.not (Eq.eq tag \"1.0.0_hell-2026-05-29\")"
-        setupBootstrap,
-      Text.isInfixOf
-        "if Main.releaseAttestationRequired tag\n    then do\n      Process.runProcess_ $\n        Process.proc \"gh\" [\"release\", \"verify\", tag, \"--repo\", repository]"
-        setupBootstrap,
-      Text.isInfixOf
-        "\"release attestation may be omitted only for the fixed legacy release\""
-        setupBootstrap
+        versionsSchema
     ]
 
 workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
@@ -1116,25 +1106,14 @@ checkPolicy = do
       else IO.pure ()
   let workflows =
         List.filter
-          (\path -> List.or
-            [Text.isPrefixOf ".github/workflows/" path,
-             Text.isSuffixOf "/action.yml" path])
+          (Text.isPrefixOf ".github/workflows/")
           files
   Monad.forM_ workflows \path -> do
     body <- Text.readFile path
     let lines = Text.lines body
     let runLines = List.filter (Text.isInfixOf "run: ") lines
     let shellLines = List.map Text.strip (List.filter (Text.isInfixOf "shell: ") lines)
-    let composite = Text.isSuffixOf "/action.yml" path
-    if composite
-      then do
-        Main.require
-          (Eq.eq (List.length shellLines) (List.length runLines))
-          "composite action run step lacks its required shell"
-        Main.require
-          (List.and (List.map (Eq.eq "shell: sh") shellLines))
-          "composite action selects a shell other than sh"
-      else Main.require (Eq.eq shellLines []) "normal workflow selects an explicit shell"
+    Main.require (Eq.eq shellLines []) "normal workflow selects an explicit shell"
     Main.require (Bool.not (Text.isInfixOf "run: |" body)) "workflow has a command block"
     Main.require (Bool.not (Text.isInfixOf "run: >" body)) "workflow has a folded command block"
     Monad.forM_ runLines \line ->
@@ -1183,8 +1162,6 @@ checkPolicy = do
   cacheWorkflow <- Text.readFile ".github/workflows/cache.yml"
   versions <- Text.readFile "release/versions.json"
   versionsSchema <- Text.readFile "release/versions.schema.json"
-  setupBootstrap <-
-    Text.readFile ".github/actions/setup-hell/programs/validate-bootstrap.hell"
   security <- Text.readFile "SECURITY.md"
   Main.require
     (Main.staticBinaryPlacementValid flake)
@@ -1223,8 +1200,7 @@ checkPolicy = do
       verifyWorkflow
       releaseControl
       versions
-      versionsSchema
-      setupBootstrap)
+      versionsSchema)
     "published release history trust policy differs"
   Main.require
     (Main.releaseCandidateHistoryValid Bool.True Bool.False)
@@ -1284,8 +1260,7 @@ checkPolicy = do
         (Text.replace "  workflow_dispatch:\n" "" verifyWorkflow)
         releaseControl
         versions
-        versionsSchema
-        setupBootstrap))
+        versionsSchema))
     "published policy accepted loss of manual fix-forward dispatch"
   Main.require
     (Bool.not
@@ -1296,8 +1271,7 @@ checkPolicy = do
           verifyWorkflow)
         releaseControl
         versions
-        versionsSchema
-        setupBootstrap))
+        versionsSchema))
     "published policy accepted a different tagged source checkout"
   Main.require
     (Bool.not
@@ -1308,8 +1282,7 @@ checkPolicy = do
           "\"--source-digest\", \"untrusted\""
           releaseControl)
         versions
-        versionsSchema
-        setupBootstrap))
+        versionsSchema))
     "published policy accepted an unbound artifact attestation digest"
   Main.require
     (Bool.not
@@ -1320,8 +1293,7 @@ checkPolicy = do
           "if Eq.eq tag Main.fixedTag"
           releaseControl)
         versions
-        versionsSchema
-        setupBootstrap))
+        versionsSchema))
     "published policy accepted a moving legacy exception"
   Main.require
     (Bool.not
@@ -1332,8 +1304,7 @@ checkPolicy = do
           "\"releaseAttestationRequired\": false"
           "\"releaseAttestationRequired\": true"
           versions)
-        versionsSchema
-        setupBootstrap))
+        versionsSchema))
     "published policy accepted changed legacy publication metadata"
   Main.require
     (Bool.not

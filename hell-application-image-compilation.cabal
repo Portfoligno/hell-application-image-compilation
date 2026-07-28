@@ -35,9 +35,6 @@ extra-source-files:
     automation/hell-automation-release-control.hell
     automation/hell-automation-tests.hell
     automation/hell-automation.hell
-    .github/actions/setup-hell/programs/publish-setup.hell
-    .github/actions/setup-hell/programs/validate-bootstrap.hell
-    .github/actions/setup-hell/action.yml
     test/automation/argv-probe.hell
     test/automation/fake-gh.hell
     test/fixtures/application-image-compilation/args-rts.hell

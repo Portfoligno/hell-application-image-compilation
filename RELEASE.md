@@ -91,10 +91,7 @@ all of these gates pass on the exact commit to be tagged:
     attestation.
 
 The first release is built from the locked Nix source closure because a release
-cannot bootstrap from its own not-yet-published binaries. The repository setup
-action becomes supported only after the published native archive and member
-digests have been reviewed into its trust data. Those trust files are not a
-seventh release asset.
+cannot bootstrap from its own not-yet-published binaries.
 
 ## Published-release recovery
 

@@ -309,9 +309,6 @@ acceptance = \automation product sourceRoot -> do
   Temp.withSystemTempDirectory "hell-cache-policy-negative" \temporary -> do
     let githubDirectory = Main.joinPath temporary ".github"
     let workflowDirectory = Main.joinPath githubDirectory "workflows"
-    let actionsDirectory = Main.joinPath githubDirectory "actions"
-    let setupDirectory = Main.joinPath actionsDirectory "setup-hell"
-    let setupProgramsDirectory = Main.joinPath setupDirectory "programs"
     let releaseDirectory = Main.joinPath temporary "release"
     let automationDirectory = Main.joinPath temporary "automation"
     let sourceGithubDirectory = Main.joinPath sourceRoot ".github"
@@ -319,9 +316,6 @@ acceptance = \automation product sourceRoot -> do
     let sourceReleaseDirectory = Main.joinPath sourceRoot "release"
     Directory.createDirectory githubDirectory
     Directory.createDirectory workflowDirectory
-    Directory.createDirectory actionsDirectory
-    Directory.createDirectory setupDirectory
-    Directory.createDirectory setupProgramsDirectory
     Directory.createDirectory releaseDirectory
     Directory.createDirectory automationDirectory
     Monad.forM_
@@ -336,13 +330,6 @@ acceptance = \automation product sourceRoot -> do
       \name -> do
         body <- Text.readFile (Main.joinPath sourceReleaseDirectory name)
         Text.writeFile (Main.joinPath releaseDirectory name) body
-    let setupBootstrapPath =
-          ".github/actions/setup-hell/programs/validate-bootstrap.hell"
-    setupBootstrapSource <-
-      Text.readFile (Main.joinPath sourceRoot setupBootstrapPath)
-    Text.writeFile
-      (Main.joinPath temporary setupBootstrapPath)
-      setupBootstrapSource
     let checksSourcePath = "automation/hell-automation-checks.hell"
     let releaseBuildSourcePath = "automation/hell-automation-release-build.hell"
     let releaseControlSourcePath = "automation/hell-automation-release-control.hell"
@@ -680,14 +667,6 @@ acceptance = \automation product sourceRoot -> do
         versionsSource)
       findPath statPath
       "policy accepted changed legacy publication metadata"
-    Main.expectPolicyMutationFailure
-      automation temporary setupBootstrapPath setupBootstrapSource
-      (Text.replace
-        "Bool.not (Eq.eq tag \"1.0.0_hell-2026-05-29\")"
-        "Bool.not (Eq.eq tag \"other\")"
-        setupBootstrapSource)
-      findPath statPath
-      "policy accepted a different setup-action release-attestation exception"
     Main.expectPolicyMutationFailure
       automation temporary "flake.nix" flakeSource
       (Text.replace
@@ -1096,12 +1075,6 @@ acceptance = \automation product sourceRoot -> do
         flake)
       findPath statPath
       "policy accepted aliased prospective automation members"
-  let sourceActionTrust =
-        Main.joinPath
-          (Main.joinPath (Main.joinPath (Main.joinPath sourceRoot ".github") "actions") "setup-hell")
-          "trust"
-  ready <- Directory.doesFileExist (Main.joinPath sourceActionTrust "READY")
-  Main.assert (Bool.not ready) "pre-publication setup unexpectedly has READY trust activation"
   Temp.withSystemTempDirectory "hell-fake-gh" \temporary -> do
     let local = Main.joinPath temporary "local"
     let remote = Main.joinPath temporary "remote"
