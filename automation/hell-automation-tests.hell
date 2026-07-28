@@ -155,12 +155,16 @@ modeEnvironment = \automation sourceRoot -> do
       then do
         cabalTool <- Main.env "HELL_TOOL_CABAL"
         ghcTool <- Main.env "HELL_TOOL_GHC"
+        pandocTool <- Main.env "HELL_TOOL_PANDOC"
         Main.assert
           (Text.isPrefixOf "/" (Maybe.maybe "" Function.id cabalTool))
           "documentation check did not declare an absolute HELL_TOOL_CABAL"
         Main.assert
           (Text.isPrefixOf "/" (Maybe.maybe "" Function.id ghcTool))
           "documentation check did not declare an absolute HELL_TOOL_GHC"
+        Main.assert
+          (Text.isPrefixOf "/" (Maybe.maybe "" Function.id pandocTool))
+          "documentation check did not declare an absolute HELL_TOOL_PANDOC"
     else if Eq.eq (Maybe.maybe "" Function.id mode) "check-sdist"
       then do
         home <- Main.env "HOME"
@@ -305,6 +309,9 @@ acceptance = \automation product sourceRoot -> do
   Temp.withSystemTempDirectory "hell-cache-policy-negative" \temporary -> do
     let githubDirectory = Main.joinPath temporary ".github"
     let workflowDirectory = Main.joinPath githubDirectory "workflows"
+    let actionsDirectory = Main.joinPath githubDirectory "actions"
+    let setupDirectory = Main.joinPath actionsDirectory "setup-hell"
+    let setupProgramsDirectory = Main.joinPath setupDirectory "programs"
     let releaseDirectory = Main.joinPath temporary "release"
     let automationDirectory = Main.joinPath temporary "automation"
     let sourceGithubDirectory = Main.joinPath sourceRoot ".github"
@@ -312,6 +319,9 @@ acceptance = \automation product sourceRoot -> do
     let sourceReleaseDirectory = Main.joinPath sourceRoot "release"
     Directory.createDirectory githubDirectory
     Directory.createDirectory workflowDirectory
+    Directory.createDirectory actionsDirectory
+    Directory.createDirectory setupDirectory
+    Directory.createDirectory setupProgramsDirectory
     Directory.createDirectory releaseDirectory
     Directory.createDirectory automationDirectory
     Monad.forM_
@@ -322,10 +332,17 @@ acceptance = \automation product sourceRoot -> do
         body <- Text.readFile (Main.joinPath sourceWorkflowDirectory name)
         Text.writeFile (Main.joinPath workflowDirectory name) body
     Monad.forM_
-      ["versions.schema.json", "release-manifest.schema.json", "spdx-2.3.schema.json"]
+      ["versions.json", "versions.schema.json", "release-manifest.schema.json", "spdx-2.3.schema.json"]
       \name -> do
         body <- Text.readFile (Main.joinPath sourceReleaseDirectory name)
         Text.writeFile (Main.joinPath releaseDirectory name) body
+    let setupBootstrapPath =
+          ".github/actions/setup-hell/programs/validate-bootstrap.hell"
+    setupBootstrapSource <-
+      Text.readFile (Main.joinPath sourceRoot setupBootstrapPath)
+    Text.writeFile
+      (Main.joinPath temporary setupBootstrapPath)
+      setupBootstrapSource
     let checksSourcePath = "automation/hell-automation-checks.hell"
     let releaseBuildSourcePath = "automation/hell-automation-release-build.hell"
     let releaseControlSourcePath = "automation/hell-automation-release-control.hell"
@@ -353,6 +370,7 @@ acceptance = \automation product sourceRoot -> do
     mainWorkflow <- Text.readFile (Main.joinPath workflowDirectory "main.yml")
     releaseWorkflow <- Text.readFile (Main.joinPath workflowDirectory "release.yml")
     verifyWorkflow <- Text.readFile (Main.joinPath workflowDirectory "verify-published.yml")
+    versionsSource <- Text.readFile (Main.joinPath releaseDirectory "versions.json")
     flake <- Text.readFile (Main.joinPath temporary "flake.nix")
     positive <- Main.withEnvironment
       [("HELL_TOOL_FIND", findPath), ("HELL_TOOL_STAT", statPath)]
@@ -556,11 +574,24 @@ acceptance = \automation product sourceRoot -> do
     Main.expectPolicyMutationFailure
       automation temporary ".github/workflows/verify-published.yml" verifyWorkflow
       (Text.replace
-        "          ref: \"1.0.0_hell-2026-05-29\"\n          fetch-depth: 0\n"
-        "          ref: \"1.0.0_hell-2026-05-29\"\n"
+        "          ref: \"1.0.0_hell-2026-05-29\"\n          path: published-source\n          fetch-depth: 0\n"
+        "          ref: \"1.0.0_hell-2026-05-29\"\n          path: published-source\n"
         verifyWorkflow)
       findPath statPath
       "policy accepted publication verification without main history"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/verify-published.yml" verifyWorkflow
+      (Text.replace "  workflow_dispatch:\n" "" verifyWorkflow)
+      findPath statPath
+      "policy accepted loss of manual fix-forward verification"
+    Main.expectPolicyMutationFailure
+      automation temporary ".github/workflows/verify-published.yml" verifyWorkflow
+      (Text.replace
+        "          path: published-source\n"
+        "          path: other-source\n"
+        verifyWorkflow)
+      findPath statPath
+      "policy accepted a different published source checkout"
     Main.expectPolicyMutationFailure
       automation temporary checksSourcePath checksSource
       (Text.replace
@@ -612,8 +643,8 @@ acceptance = \automation product sourceRoot -> do
     Main.expectPolicyMutationFailure
       automation temporary releaseControlSourcePath releaseControlSource
       (Text.replace
-        "tagInMain <- Main.gitAncestor gitTool expectedCommit \"origin/main\""
-        "tagInMain <- Main.gitAncestor gitTool \"origin/main\" expectedCommit"
+        "      expectedCommit\n      \"origin/main\""
+        "      \"origin/main\"\n      expectedCommit"
         releaseControlSource)
       findPath statPath
       "policy accepted a reversed published ancestry query"
@@ -625,6 +656,93 @@ acceptance = \automation product sourceRoot -> do
         releaseControlSource)
       findPath statPath
       "policy accepted a different published ancestry command"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "if Eq.eq tag \"1.0.0_hell-2026-05-29\""
+        "if Eq.eq tag Main.fixedTag"
+        releaseControlSource)
+      findPath statPath
+      "policy accepted a moving legacy release exception"
+    Main.expectPolicyMutationFailure
+      automation temporary releaseControlSourcePath releaseControlSource
+      (Text.replace
+        "\"--source-digest\", expectedCommit"
+        "\"--source-digest\", \"untrusted\""
+        releaseControlSource)
+      findPath statPath
+      "policy accepted artifact attestations without the peeled tag digest"
+    Main.expectPolicyMutationFailure
+      automation temporary "release/versions.json" versionsSource
+      (Text.replace
+        "\"releaseAttestationRequired\": false"
+        "\"releaseAttestationRequired\": true"
+        versionsSource)
+      findPath statPath
+      "policy accepted changed legacy publication metadata"
+    Main.expectPolicyMutationFailure
+      automation temporary setupBootstrapPath setupBootstrapSource
+      (Text.replace
+        "Bool.not (Eq.eq tag \"1.0.0_hell-2026-05-29\")"
+        "Bool.not (Eq.eq tag \"other\")"
+        setupBootstrapSource)
+      findPath statPath
+      "policy accepted a different setup-action release-attestation exception"
+    Main.expectPolicyMutationFailure
+      automation temporary "flake.nix" flakeSource
+      (Text.replace
+        "pandoc = pkgs.lib.getExe pkgs.pandoc;"
+        "pandoc = \"pandoc\";"
+        flakeSource)
+      findPath statPath
+      "policy accepted an unpinned documentation converter"
+    Monad.forM_
+      ["substitutedCabal", "substitutedGhc", "substitutedPandoc"]
+      \binding -> do
+        let declaration = Text.concat [binding, " = \""]
+        let movedDeclaration = Text.concat [binding, "Moved = \""]
+        Main.assert
+          (Eq.eq
+            (List.length (Text.splitOn declaration checksSource))
+            2)
+          (Text.concat
+            [ "documentation tool declaration target is not unique: ",
+              binding
+            ])
+        let mutatedChecks =
+              Text.replace declaration movedDeclaration checksSource
+        Main.assert
+          (Bool.not (Eq.eq mutatedChecks checksSource))
+          (Text.concat
+            [ "documentation tool mutation did not change source: ",
+              binding
+            ])
+        Main.assert
+          (Bool.not (Text.isInfixOf declaration mutatedChecks))
+          (Text.concat
+            [ "documentation tool mutation retained original declaration: ",
+              binding
+            ])
+        Main.expectPolicyMutationFailure
+          automation
+          temporary
+          checksSourcePath
+          checksSource
+          mutatedChecks
+          findPath
+          statPath
+          (Text.concat
+            [ "policy accepted a moved documentation tool declaration: ",
+              binding
+            ])
+    Main.expectPolicyMutationFailure
+      automation temporary checksSourcePath checksSource
+      (Text.replace
+        "(Process.proc pandocTool [\"--from\", \"markdown\", \"--to\", \"html\"])"
+        "(Process.proc \"pandoc\" [\"--from\", \"markdown\", \"--to\", \"html\"])"
+        checksSource)
+      findPath statPath
+      "policy accepted a literal documentation converter invocation"
     Main.expectPolicyMutationFailure
       automation temporary ".github/workflows/cache.yml" cacheWorkflow
       (Text.replace

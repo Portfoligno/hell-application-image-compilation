@@ -76,6 +76,44 @@ require = \condition message ->
 requireText = \needle haystack message ->
   Main.require (Text.isInfixOf needle haystack) message
 
+substitutionPlaceholder = \name -> Text.concat ["@", name, "@"]
+
+documentationToolDefaultValid =
+  \checks substitutedName placeholderName defaultName fallback ->
+    Text.isInfixOf
+      (Text.concat
+        [ substitutedName,
+          " = \"",
+          Main.substitutionPlaceholder placeholderName,
+          "\"\n",
+          defaultName,
+          " =\n  if Text.isPrefixOf \"@\" Main.",
+          substitutedName,
+          "\n    then \"",
+          fallback,
+          "\"\n    else Main.",
+          substitutedName
+        ])
+      checks
+
+substitutedCabal = "@cabal@"
+defaultCabal =
+  if Text.isPrefixOf "@" Main.substitutedCabal
+    then "cabal"
+    else Main.substitutedCabal
+
+substitutedGhc = "@ghc@"
+defaultGhc =
+  if Text.isPrefixOf "@" Main.substitutedGhc
+    then "ghc"
+    else Main.substitutedGhc
+
+substitutedPandoc = "@pandoc@"
+defaultPandoc =
+  if Text.isPrefixOf "@" Main.substitutedPandoc
+    then "pandoc"
+    else Main.substitutedPandoc
+
 lowerHex = \width value ->
   List.and
     [ Eq.eq (Text.length value) width,
@@ -285,6 +323,62 @@ releaseValidatorClosureValid = \flake ->
         flake
     ]
 
+documentationToolClosureValid = \flake checks ->
+  List.and
+    [ Text.isInfixOf
+        "hellAutomationChecksSource =\n          pkgs.replaceVars ./automation/hell-automation-checks.hell {\n            cabal = pkgs.lib.getExe' pkgs.cabal-install \"cabal\";\n            ghc = pkgs.lib.getExe' sdistCompiler \"ghc\";\n            pandoc = pkgs.lib.getExe pkgs.pandoc;\n          };"
+        flake,
+      Text.isInfixOf
+        "documentationToolContract =\n          builtins.derivation {\n            inherit system;\n            name = \"hell-documentation-tool-contract-${system}\";\n            allowSubstitutes = false;\n            preferLocalBuild = true;\n            builder = hellAutomationChecks;\n            args = [ \"documentation-tool-contract\" ];\n            SOURCE_ROOT = ./.;\n            PATH = \"\";\n          };"
+        flake,
+      Text.isInfixOf
+        "documentation-tool-contract = documentationToolContract;"
+        flake,
+      Text.isInfixOf
+        "documentation = documentationToolContract;"
+        flake,
+      Text.isInfixOf
+        "} // pkgs.lib.optionalAttrs (mode == \"check-docs\") {\n            HELL_TOOL_CABAL = pkgs.lib.getExe' pkgs.cabal-install \"cabal\";\n            HELL_TOOL_GHC = pkgs.lib.getExe' sdistCompiler \"ghc\";\n            HELL_TOOL_PANDOC = pkgs.lib.getExe pkgs.pandoc;\n          }"
+        flake,
+      Main.documentationToolDefaultValid
+        checks
+        "substitutedCabal"
+        "cabal"
+        "defaultCabal"
+        "cabal",
+      Main.documentationToolDefaultValid
+        checks
+        "substitutedGhc"
+        "ghc"
+        "defaultGhc"
+        "ghc",
+      Main.documentationToolDefaultValid
+        checks
+        "substitutedPandoc"
+        "pandoc"
+        "defaultPandoc"
+        "pandoc",
+      Text.isInfixOf
+        "generateDocsIn = \\root -> do\n  cabalTool <- Main.envDefault \"HELL_TOOL_CABAL\" Main.defaultCabal\n  ghcTool <- Main.envDefault \"HELL_TOOL_GHC\" Main.defaultGhc\n  pandocTool <- Main.envDefault \"HELL_TOOL_PANDOC\" Main.defaultPandoc"
+        checks,
+      Text.isInfixOf
+        "(Process.proc\n              cabalTool\n              [ \"repl\",\n                \"--offline\",\n                \"-w\",\n                ghcTool,"
+        checks,
+      Text.isInfixOf
+        "documentationToolContract = do\n  cabalTool <- Main.envDefault \"HELL_TOOL_CABAL\" Main.defaultCabal\n  ghcTool <- Main.envDefault \"HELL_TOOL_GHC\" Main.defaultGhc\n  pandocTool <- Main.envDefault \"HELL_TOOL_PANDOC\" Main.defaultPandoc"
+        checks,
+      Text.isInfixOf
+        "(Process.proc pandocTool [\"--from\", \"markdown\", \"--to\", \"html\"])"
+        checks,
+      Bool.not
+        (Text.isInfixOf
+          "(Process.proc \"pandoc\""
+          checks),
+      Text.isInfixOf
+        "source <- Main.env \"SOURCE_ROOT\"\n  Directory.setCurrentDirectory source\n  Main.checkDocs"
+        checks
+    ]
+
 releaseValidatorCallSitesValid = \releaseBuild releaseControl ->
   List.and
     [ Bool.not (Text.isInfixOf "Main.run \"check-jsonschema\"" releaseBuild),
@@ -380,20 +474,136 @@ releaseCandidateTrustPolicyValid = \checks ->
         checks
     ]
 
-publishedReleaseTrustPolicyValid = \verifyWorkflow releaseControl ->
+publishedReleaseTrustPolicyValid =
+  \verifyWorkflow releaseControl versions versionsSchema setupBootstrap ->
   List.and
     [ Text.isInfixOf
-        "      - name: Check out fixed release policy\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: \"1.0.0_hell-2026-05-29\"\n          fetch-depth: 0\n          persist-credentials: false"
+        "  release:\n    types:\n      - published\n  workflow_dispatch:"
         verifyWorkflow,
       Text.isInfixOf
-        "gitTool\n        [\"merge-base\", \"--is-ancestor\", ancestor, descendant]"
+        "permissions:\n  attestations: read\n  contents: read"
+        verifyWorkflow,
+      Eq.eq
+        (List.length
+          (Text.splitOn
+            "          ref: ${{ github.event.repository.default_branch }}\n"
+            verifyWorkflow))
+        3,
+      Eq.eq
+        (List.length
+          (Text.splitOn
+            "          ref: \"1.0.0_hell-2026-05-29\"\n"
+            verifyWorkflow))
+        3,
+      Eq.eq
+        (List.length
+          (Text.splitOn
+            "          path: published-source\n"
+            verifyWorkflow))
+        3,
+      Eq.eq
+        (List.length
+          (Text.splitOn
+            "          fetch-depth: 0\n"
+            verifyWorkflow))
+        3,
+      Text.isInfixOf
+        "run: ./result-automation-release-control verify-published verified-release published-source"
+        verifyWorkflow,
+      Text.isInfixOf
+        "run: ./result-automation-checks check-docs published-source"
+        verifyWorkflow,
+      Text.isInfixOf
+        "Process.setWorkingDir\n        directory\n        (Process.proc\n          gitTool\n          [\"merge-base\", \"--is-ancestor\", ancestor, descendant])"
         releaseControl,
       Text.isInfixOf
-        "tagInMain <- Main.gitAncestor gitTool expectedCommit \"origin/main\""
+        "tagType <- Main.captureIn publishedSource gitTool\n    [\"cat-file\", \"-t\", Main.fixedTag]"
+        releaseControl,
+      Text.isInfixOf
+        "peeled <- Main.captureIn publishedSource gitTool\n    [\"rev-parse\", \"1.0.0_hell-2026-05-29^{}\"]"
+        releaseControl,
+      Text.isInfixOf
+        "Main.gitAncestorIn\n      publishedSource\n      gitTool\n      expectedCommit\n      \"origin/main\""
         releaseControl,
       Text.isInfixOf
         "Main.require\n    (Main.publishedReleaseHistoryValid tagInMain)\n    \"published tag commit is not contained in origin/main\""
-        releaseControl
+        releaseControl,
+      Bool.not
+        (Text.isInfixOf
+          "GITHUB_SHA"
+          (Maybe.maybe
+            ""
+            Function.id
+            (Maybe.listToMaybe
+              (List.drop 1 (Text.splitOn "verifyPublished =" releaseControl))))),
+      Text.isInfixOf
+        "\"--json\", \"body,isDraft,isImmutable,isPrerelease,tagName,name,targetCommitish\""
+        releaseControl,
+      Text.isInfixOf
+        "[\"release\", \"view\", \"--repo\", Main.fixedRepository, \"--json\", \"tagName\"]"
+        releaseControl,
+      Text.isInfixOf
+        "(Bool.not (Main.jsonBool (Main.jsonObjectField \"isPrerelease\" view)))"
+        releaseControl,
+      Text.isInfixOf
+        "(Main.jsonString (Main.jsonObjectField \"tagName\" latest))\n      Main.fixedTag"
+        releaseControl,
+      Text.isInfixOf
+        "Text.readFile (Main.joinPath publishedSource \"release/notes-1.0.0.md\")"
+        releaseControl,
+      Text.isInfixOf
+        "Main.joinPath publishedSource \"release/release-manifest.schema.json\""
+        releaseControl,
+      Text.isInfixOf
+        "Main.joinPath publishedSource \"release/spdx-2.3.schema.json\""
+        releaseControl,
+      Text.isInfixOf
+        "if Eq.eq tag \"1.0.0_hell-2026-05-29\""
+        releaseControl,
+      Bool.not
+        (Text.isInfixOf "if Eq.eq tag Main.fixedTag" releaseControl),
+      Text.isInfixOf
+        "if releaseAttestationRequired\n    then Main.run ghTool\n      [\"release\", \"verify\", Main.fixedTag, \"--repo\", Main.fixedRepository]"
+        releaseControl,
+      Text.isInfixOf
+        "\"--signer-workflow\", signerWorkflow,\n       \"--source-ref\", sourceRef,\n       \"--source-digest\", expectedCommit,"
+        releaseControl,
+      Eq.eq
+        (List.length
+          (Text.splitOn "\"--signer-workflow\", signerWorkflow" releaseControl))
+        4,
+      Eq.eq
+        (List.length
+          (Text.splitOn "\"--source-ref\", sourceRef" releaseControl))
+        4,
+      Eq.eq
+        (List.length
+          (Text.splitOn "\"--source-digest\", expectedCommit" releaseControl))
+        4,
+      Text.isInfixOf
+        "\"immutability\": \"legacy-mutable\""
+        versions,
+      Text.isInfixOf
+        "\"releaseAttestationRequired\": false"
+        versions,
+      Text.isInfixOf
+        "\"artifactAttestationsRequired\": true"
+        versions,
+      Text.isInfixOf
+        "\"immutability\": {\n              \"const\": \"legacy-mutable\"\n            }"
+        versionsSchema,
+      Text.isInfixOf
+        "\"releaseAttestationRequired\": {\n              \"const\": false\n            }"
+        versionsSchema,
+      Text.isInfixOf
+        "releaseAttestationRequired = \\tag ->\n  Bool.not (Eq.eq tag \"1.0.0_hell-2026-05-29\")"
+        setupBootstrap,
+      Text.isInfixOf
+        "if Main.releaseAttestationRequired tag\n    then do\n      Process.runProcess_ $\n        Process.proc \"gh\" [\"release\", \"verify\", tag, \"--repo\", repository]"
+        setupBootstrap,
+      Text.isInfixOf
+        "\"release attestation may be omitted only for the fixed legacy release\""
+        setupBootstrap
     ]
 
 workflowOptimizationPolicyValid = \mainWorkflow releaseWorkflow verifyWorkflow ->
@@ -620,8 +830,8 @@ activeCachePolicyValid =
         (Text.strip cacheWorkflow),
       Bool.not (Text.isInfixOf "secrets.CACHIX" requestWorkflow),
       Bool.not (Text.isInfixOf "github.event.workflow_run.head_sha }}#cache" cacheWorkflow),
-      Eq.eq (List.length (Text.splitOn "allowSubstitutes = false;" flake)) 5,
-      Eq.eq (List.length (Text.splitOn "preferLocalBuild = true;" flake)) 5,
+      Eq.eq (List.length (Text.splitOn "allowSubstitutes = false;" flake)) 6,
+      Eq.eq (List.length (Text.splitOn "preferLocalBuild = true;" flake)) 6,
       Bool.not (Text.isInfixOf "hell-ci-cache-seed-v1-${system}" flake),
       Bool.not (Text.isInfixOf "\n        cacheSeed =" flake),
       Text.isInfixOf "cache-client = pkgs.cachix;" flake,
@@ -971,6 +1181,10 @@ checkPolicy = do
   verifyWorkflow <- Text.readFile ".github/workflows/verify-published.yml"
   requestWorkflow <- Text.readFile ".github/workflows/cache-request.yml"
   cacheWorkflow <- Text.readFile ".github/workflows/cache.yml"
+  versions <- Text.readFile "release/versions.json"
+  versionsSchema <- Text.readFile "release/versions.schema.json"
+  setupBootstrap <-
+    Text.readFile ".github/actions/setup-hell/programs/validate-bootstrap.hell"
   security <- Text.readFile "SECURITY.md"
   Main.require
     (Main.staticBinaryPlacementValid flake)
@@ -989,6 +1203,9 @@ checkPolicy = do
     (Main.releaseValidatorClosureValid flake)
     "release automation validators must be pinned into image closures"
   Main.require
+    (Main.documentationToolClosureValid flake checks)
+    "documentation tools must be pinned into the checks image closure"
+  Main.require
     (Main.releaseValidatorCallSitesValid releaseBuild releaseControl)
     "release automation validators must use substituted executable paths"
   Main.require
@@ -1002,7 +1219,12 @@ checkPolicy = do
     (Main.releaseCandidateTrustPolicyValid checks)
     "release candidate history trust policy differs"
   Main.require
-    (Main.publishedReleaseTrustPolicyValid verifyWorkflow releaseControl)
+    (Main.publishedReleaseTrustPolicyValid
+      verifyWorkflow
+      releaseControl
+      versions
+      versionsSchema
+      setupBootstrap)
     "published release history trust policy differs"
   Main.require
     (Main.releaseCandidateHistoryValid Bool.True Bool.False)
@@ -1056,6 +1278,81 @@ checkPolicy = do
           "          ref: \"other\"\n"
           verifyWorkflow)))
     "workflow policy accepted different publication verification refs"
+  Main.require
+    (Bool.not
+      (Main.publishedReleaseTrustPolicyValid
+        (Text.replace "  workflow_dispatch:\n" "" verifyWorkflow)
+        releaseControl
+        versions
+        versionsSchema
+        setupBootstrap))
+    "published policy accepted loss of manual fix-forward dispatch"
+  Main.require
+    (Bool.not
+      (Main.publishedReleaseTrustPolicyValid
+        (Text.replace
+          "          path: published-source\n"
+          "          path: other-source\n"
+          verifyWorkflow)
+        releaseControl
+        versions
+        versionsSchema
+        setupBootstrap))
+    "published policy accepted a different tagged source checkout"
+  Main.require
+    (Bool.not
+      (Main.publishedReleaseTrustPolicyValid
+        verifyWorkflow
+        (Text.replace
+          "\"--source-digest\", expectedCommit"
+          "\"--source-digest\", \"untrusted\""
+          releaseControl)
+        versions
+        versionsSchema
+        setupBootstrap))
+    "published policy accepted an unbound artifact attestation digest"
+  Main.require
+    (Bool.not
+      (Main.publishedReleaseTrustPolicyValid
+        verifyWorkflow
+        (Text.replace
+          "if Eq.eq tag \"1.0.0_hell-2026-05-29\""
+          "if Eq.eq tag Main.fixedTag"
+          releaseControl)
+        versions
+        versionsSchema
+        setupBootstrap))
+    "published policy accepted a moving legacy exception"
+  Main.require
+    (Bool.not
+      (Main.publishedReleaseTrustPolicyValid
+        verifyWorkflow
+        releaseControl
+        (Text.replace
+          "\"releaseAttestationRequired\": false"
+          "\"releaseAttestationRequired\": true"
+          versions)
+        versionsSchema
+        setupBootstrap))
+    "published policy accepted changed legacy publication metadata"
+  Main.require
+    (Bool.not
+      (Main.documentationToolClosureValid
+        (Text.replace
+          "pandoc = pkgs.lib.getExe pkgs.pandoc;"
+          "pandoc = \"pandoc\";"
+          flake)
+        checks))
+    "documentation policy accepted an unpinned pandoc executable"
+  Main.require
+    (Bool.not
+      (Main.documentationToolClosureValid
+        flake
+        (Text.replace
+          "(Process.proc pandocTool [\"--from\", \"markdown\", \"--to\", \"html\"])"
+          "(Process.proc \"pandoc\" [\"--from\", \"markdown\", \"--to\", \"html\"])"
+          checks)))
+    "documentation policy accepted a literal pandoc invocation"
   Main.require
     (Bool.not
       (Main.tagMetadataCheckoutPolicyValid
@@ -1164,7 +1461,10 @@ checkMetadata = do
       "\"name\": \"Application Image Compilation\"",
       "\"version\": \"1.0.0\"",
       "\"tag\": \"1.0.0_hell-2026-05-29\"",
-      "\"artifactStem\": \"hell-application-image-compilation-1.0.0-hell-2026-05-29\""
+      "\"artifactStem\": \"hell-application-image-compilation-1.0.0-hell-2026-05-29\"",
+      "\"immutability\": \"legacy-mutable\"",
+      "\"releaseAttestationRequired\": false",
+      "\"artifactAttestationsRequired\": true"
     ]
     \required -> Main.requireText required versions "release identity metadata is stale"
   Monad.forM_
@@ -1234,8 +1534,9 @@ checkHpack = do
   Text.putStrLn "hpack output is current"
 
 generateDocsIn = \root -> do
-  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" "cabal"
-  ghcTool <- Main.envDefault "HELL_TOOL_GHC" "ghc"
+  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" Main.defaultCabal
+  ghcTool <- Main.envDefault "HELL_TOOL_GHC" Main.defaultGhc
+  pandocTool <- Main.envDefault "HELL_TOOL_PANDOC" Main.defaultPandoc
   let repl = Text.unlines [":l src/Hell.hs", "_generateApiDocs", ":quit"]
   Temp.withSystemTempDirectory "hell-docs" \temporary -> do
     let buildDirectory = Main.joinPath temporary "dist-newstyle"
@@ -1272,7 +1573,7 @@ generateDocsIn = \root -> do
       Text.readProcessStdout_
         (Text.setStdin
           (Text.unlines ["```haskell", input, "```"])
-          (Process.proc "pandoc" ["--from", "markdown", "--to", "html"]))
+          (Process.proc pandocTool ["--from", "markdown", "--to", "html"]))
     IO.pure (example, html)
   css <- Text.readFile (Main.joinPath root "docs/style.css")
   Text.writeFile
@@ -1292,9 +1593,10 @@ generateDocsIn = \root -> do
 
 generateDocs = Main.generateDocsIn "."
 
-checkDocs = do
-  expectedApi <- ByteString.readFile "docs/api/index.html"
-  expectedExamples <- ByteString.readFile "docs/examples/index.html"
+checkDocsIn = \root -> do
+  expectedApi <- ByteString.readFile (Main.joinPath root "docs/api/index.html")
+  expectedExamples <-
+    ByteString.readFile (Main.joinPath root "docs/examples/index.html")
   Temp.withSystemTempDirectory "hell-docs-check" \temporary -> do
     let source = Main.joinPath temporary "source"
     let sourceDirectory = Main.joinPath source "src"
@@ -1320,11 +1622,11 @@ checkDocs = do
         ),
         ("LICENSE", Main.joinPath source "LICENSE")
       ]
-      \(input, output) -> Directory.copyFile input output
-    examples <- Directory.listDirectory "examples"
+      \(input, output) -> Directory.copyFile (Main.joinPath root input) output
+    examples <- Directory.listDirectory (Main.joinPath root "examples")
     Monad.forM_ examples \example ->
       Directory.copyFile
-        (Main.joinPath "examples" example)
+        (Main.joinPath (Main.joinPath root "examples") example)
         (Main.joinPath examplesDirectory example)
     Main.generateDocsIn source
     actualApi <- ByteString.readFile (Main.joinPath apiDirectory "index.html")
@@ -1332,7 +1634,7 @@ checkDocs = do
       ByteString.readFile (Main.joinPath docsExamplesDirectory "index.html")
     Main.require (Eq.eq actualApi expectedApi) "generated API documentation has drifted"
     Main.require (Eq.eq actualExamples expectedExamples) "generated examples documentation has drifted"
-  homepage <- Text.readFile "docs/index.html"
+  homepage <- Text.readFile (Main.joinPath root "docs/index.html")
   Monad.forM_
     [ "<title>Hell 2026-05-29 — Application Image Compilation 1.0.0</title>",
       "Application Image Compilation 1.0.0",
@@ -1344,15 +1646,38 @@ checkDocs = do
     ]
     \required -> Main.requireText required homepage "homepage identity or policy link is stale"
   Monad.forM_ ["docs/api/index.html", "docs/examples/index.html"] \path -> do
-    text <- Text.readFile path
+    text <- Text.readFile (Main.joinPath root path)
     Main.require (Text.isSuffixOf "\n" text) (Text.concat [path, " lacks final newline"])
   Text.putStrLn "documentation identity checks passed"
+
+checkDocs = Main.checkDocsIn "."
+
+documentationToolContract = do
+  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" Main.defaultCabal
+  ghcTool <- Main.envDefault "HELL_TOOL_GHC" Main.defaultGhc
+  pandocTool <- Main.envDefault "HELL_TOOL_PANDOC" Main.defaultPandoc
+  Monad.forM_
+    [ ("cabal", cabalTool),
+      ("ghc", ghcTool),
+      ("pandoc", pandocTool)
+    ]
+    \(label, tool) -> do
+      Main.require
+        (Text.isPrefixOf "/" tool)
+        (Text.concat [label, " is not an absolute packaged executable"])
+      exists <- Directory.doesFileExist tool
+      Main.require exists (Text.concat [label, " is absent from the closure"])
+  source <- Main.env "SOURCE_ROOT"
+  Directory.setCurrentDirectory source
+  Main.checkDocs
+  output <- Main.env "out"
+  Text.writeFile output "documentation tool closure passed\n"
 
 checkSdist = do
   short <- Main.envDefault "HELL_SDIST_SHORT_TIMEOUT" "120"
   build <- Main.envDefault "HELL_SDIST_BUILD_TIMEOUT" "600"
-  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" "cabal"
-  ghcTool <- Main.envDefault "HELL_TOOL_GHC" "ghc"
+  cabalTool <- Main.envDefault "HELL_TOOL_CABAL" Main.defaultCabal
+  ghcTool <- Main.envDefault "HELL_TOOL_GHC" Main.defaultGhc
   timeoutTool <- Main.envDefault "HELL_TOOL_TIMEOUT" "timeout"
   tarTool <- Main.envDefault "HELL_TOOL_TAR" "tar"
   Temp.withSystemTempDirectory "hell-sdist" \temporary -> do
@@ -1457,7 +1782,15 @@ main = do
   else if Eq.eq command "hpack-drift" then Main.checkHpack
   else if Eq.eq command "check-sdist" then Main.checkSdist
   else if Eq.eq command "generate-docs" then Main.generateDocs
-  else if Eq.eq command "check-docs" then Main.checkDocs
+  else if Eq.eq command "check-docs"
+    then do
+      Main.require (List.elem count [1,2])
+        "check-docs requires an optional source directory"
+      root <-
+        if Eq.eq count 2
+          then IO.pure (Main.argument 1 arguments)
+          else IO.pure "."
+      Main.checkDocsIn root
   else if Eq.eq command "check-cache-closure" then do
     Main.require (Eq.eq count 2) "check-cache-closure requires one root"
     Main.checkCacheClosure (Main.argument 1 arguments)
@@ -1468,6 +1801,11 @@ main = do
     Main.require (List.elem count [1,3])
       "assert-cache-host accepts either no repository or trusted and request"
     Main.assertCacheHost (List.drop 1 arguments)
+  else if Eq.eq command "documentation-tool-contract"
+    then do
+      Main.require (Eq.eq count 1)
+        "documentation-tool-contract takes no arguments"
+      Main.documentationToolContract
   else if Eq.eq command "nix-acceptance" then Main.nixAcceptance
   else if Eq.eq command "nix-check" then Main.nixCheck
   else Main.die "usage: hell-automation checks command"

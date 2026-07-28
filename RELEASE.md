@@ -83,7 +83,12 @@ all of these gates pass on the exact commit to be tagged:
     do not let GitHub infer that status from the composite tag.
 15. After publication, confirm the release displays GitHub's **Latest** badge
     and require the separate read-only publication-verification workflow to
-    pass.
+    pass. The already-published `1.0.0_hell-2026-05-29` release is explicitly
+    recorded as the sole legacy mutable exception and is verified through its
+    exact tag, metadata, assets, digests, and artifact attestations. Enable
+    GitHub release immutability externally before any future publication;
+    future releases must report immutable and pass their GitHub release
+    attestation.
 
 The first release is built from the locked Nix source closure because a release
 cannot bootstrap from its own not-yet-published binaries. The repository setup
@@ -93,9 +98,12 @@ seventh release asset.
 
 ## Published-release recovery
 
-Published release identities are immutable. Never force-move, delete and
-recreate, or reuse a published tag, and never publish different contents under
-an existing feature version or artifact name.
+Published release identities are immutable by repository policy. Never
+force-move, delete and recreate, or reuse a published tag, and never publish
+different contents under an existing feature version or artifact name. GitHub
+platform immutability was not enabled for the already-published
+`1.0.0_hell-2026-05-29` release, so preserve that exact legacy record and
+enable the prospective setting before every future release.
 
 If a published release is found to be defective:
 

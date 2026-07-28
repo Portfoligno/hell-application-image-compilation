@@ -4,13 +4,16 @@ The only publishable release is produced by
 `.github/workflows/release.yml` from the protected annotated tag recorded in
 `versions.json`. Local and cross builds are release candidates only.
 
-Before the first release, repository owners must:
+Repository owners must:
 
 1. protect `main` and require `metadata`, `test (x86_64-linux)`, and
    `test (aarch64-linux)`;
 2. protect `1.0.0_hell-2026-05-29` against unauthorized creation,
    update, and deletion;
-3. enable immutable GitHub releases;
+3. enable immutable GitHub releases for every future publication; GitHub
+   applies this setting prospectively and the already-published
+   `1.0.0_hell-2026-05-29` release remains the sole explicit legacy mutable
+   exception;
 4. restrict allowed Actions to the full-SHA-pinned actions used by this
    repository; and
 5. configure Pages for GitHub Actions at
@@ -30,8 +33,17 @@ explicitly selects **Set as latest release**, and uses the Releases page
 **Publish release** button. After publication, the maintainer confirms the
 release displays GitHub's **Latest** badge. Publication starts a separate
 read-only verification workflow that independently requires the tagged commit
-to be contained in `origin/main`; that workflow may report a failure but cannot
-edit, delete, replace, or republish anything.
+to be contained in `origin/main`; it can also be dispatched from current
+`main` to fix verification policy while checking the exact published tag. That
+workflow may report a failure but cannot edit, delete, replace, or republish
+anything.
+
+The exact `1.0.0_hell-2026-05-29` release was published before release
+immutability was enabled. Its repository metadata therefore records
+`legacy-mutable`, requires the existing artifact provenance and SPDX
+attestations, and does not claim a GitHub immutable-release attestation.
+This is not a fallback for another release. Every future release must report
+`isImmutable: true` and pass `gh release verify`.
 
 Release tags use `<AIC-SemVer>_hell-<Hell-YYYY-MM-DD>`. This is a composite
 two-axis identifier, not SemVer, so release chronology and GitHub's latest
@@ -58,7 +70,8 @@ closure; it cannot download the release that it is in the process of creating.
 ## Bad-release recovery
 
 Never move, delete for replacement, or reuse a release tag. Never replace an
-asset under an existing filename. Immutable releases and their attestations
+asset under an existing filename. The legacy `1.0.0_hell-2026-05-29` record
+must be preserved exactly; future immutable releases and their attestations
 remain the audit record.
 
 For an ordinary defect:

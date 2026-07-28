@@ -43,15 +43,35 @@ capture = \executable arguments -> do
           "\n--- stderr ---\n", err
         ])
 
-gitAncestor = \gitTool ancestor descendant -> do
+gitAncestorIn = \directory gitTool ancestor descendant -> do
   (code, _out, _err) <-
     Text.readProcess
-      (Process.proc
-        gitTool
-        ["merge-base", "--is-ancestor", ancestor, descendant])
+      (Process.setWorkingDir
+        directory
+        (Process.proc
+          gitTool
+          ["merge-base", "--is-ancestor", ancestor, descendant]))
   IO.pure (Eq.eq code Exit.ExitSuccess)
 
 publishedReleaseHistoryValid = \tagInMain -> tagInMain
+
+publicationPolicyValid =
+  \tag actualImmutable immutability releaseAttestationRequired artifactAttestationsRequired ->
+    if Eq.eq tag "1.0.0_hell-2026-05-29"
+      then
+        List.and
+          [ Eq.eq actualImmutable Bool.False,
+            Eq.eq immutability "legacy-mutable",
+            Eq.eq releaseAttestationRequired Bool.False,
+            Eq.eq artifactAttestationsRequired Bool.True
+          ]
+      else
+        List.and
+          [ actualImmutable,
+            Eq.eq immutability "immutable",
+            releaseAttestationRequired,
+            artifactAttestationsRequired
+          ]
 
 captureIn = \directory executable arguments -> do
   (code, out, err) <-
@@ -174,6 +194,24 @@ defaultPyspdxtools =
     else Main.substitutedPyspdxtools
 
 validatorContract = do
+  Main.require
+    (Main.publicationPolicyValid
+      Main.fixedTag Bool.False "legacy-mutable" Bool.False Bool.True)
+    "fixed legacy release publication policy was rejected"
+  Main.require
+    (Bool.not
+      (Main.publicationPolicyValid
+        Main.fixedTag Bool.False "immutable" Bool.True Bool.True))
+    "fixed legacy release accepted an immutable policy claim"
+  Main.require
+    (Main.publicationPolicyValid
+      "future-release" Bool.True "immutable" Bool.True Bool.True)
+    "future immutable release publication policy was rejected"
+  Main.require
+    (Bool.not
+      (Main.publicationPolicyValid
+        "future-release" Bool.False "legacy-mutable" Bool.False Bool.True))
+    "future release accepted the legacy mutable exception"
   checkJsonschemaTool <-
     Main.envDefault "HELL_TOOL_CHECK_JSONSCHEMA" Main.defaultCheckJsonschema
   pyspdxtoolsTool <-
@@ -377,24 +415,78 @@ stageDraft = \directory -> do
       remote <- ByteString.readFile (Main.joinPath temporary name)
       Main.require (Eq.eq local remote) (Text.concat ["final draft asset differs: ", name])
 
-verifyPublished = \directory -> do
+verifyPublished = \directory publishedSource -> do
   ghTool <- Main.envDefault "HELL_TOOL_GH" "gh"
   gitTool <- Main.envDefault "HELL_TOOL_GIT" "git"
-  expectedCommit <- Main.env "GITHUB_SHA"
-  tagInMain <- Main.gitAncestor gitTool expectedCommit "origin/main"
+  tagType <- Main.captureIn publishedSource gitTool
+    ["cat-file", "-t", Main.fixedTag]
+  Main.require (Eq.eq (Text.strip tagType) "tag")
+    "published release tag must be annotated"
+  peeled <- Main.captureIn publishedSource gitTool
+    ["rev-parse", "1.0.0_hell-2026-05-29^{}"]
+  let expectedCommit = Text.strip peeled
+  Main.require (Main.lowerHex Main.fullCommitWidth expectedCommit)
+    "published tag does not peel to a lowercase full commit"
+  tagInMain <-
+    Main.gitAncestorIn
+      publishedSource
+      gitTool
+      expectedCommit
+      "origin/main"
   Main.require
     (Main.publishedReleaseHistoryValid tagInMain)
     "published tag commit is not contained in origin/main"
   Directory.createDirectoryIfMissing Bool.True directory
   viewText <- Main.capture ghTool
     ["release", "view", Main.fixedTag, "--repo", Main.fixedRepository,
-     "--json", "isDraft,tagName,name,targetCommitish"]
+     "--json", "body,isDraft,isImmutable,isPrerelease,tagName,name,targetCommitish"]
   view <- Maybe.maybe (Main.die "published release metadata is invalid JSON") IO.pure
     (Json.decode (Text.encodeUtf8 viewText))
+  latestText <- Main.capture ghTool
+    ["release", "view", "--repo", Main.fixedRepository, "--json", "tagName"]
+  latest <- Maybe.maybe (Main.die "latest release metadata is invalid JSON") IO.pure
+    (Json.decode (Text.encodeUtf8 latestText))
+  versions <- Main.jsonFile "release/versions.json"
+  let feature = Main.jsonObjectField "featureRelease" versions
+  let publication = Main.jsonObjectField "publication" feature
+  let immutability =
+        Main.jsonString (Main.jsonObjectField "immutability" publication)
+  let releaseAttestationRequired =
+        Main.jsonBool
+          (Main.jsonObjectField "releaseAttestationRequired" publication)
+  let artifactAttestationsRequired =
+        Main.jsonBool
+          (Main.jsonObjectField "artifactAttestationsRequired" publication)
+  let actualImmutable =
+        Main.jsonBool (Main.jsonObjectField "isImmutable" view)
+  Main.require
+    (Main.publicationPolicyValid
+      Main.fixedTag
+      actualImmutable
+      immutability
+      releaseAttestationRequired
+      artifactAttestationsRequired)
+    "published release immutability policy differs"
   Main.require (Bool.not (Main.jsonBool (Main.jsonObjectField "isDraft" view))) "release is still a draft"
+  Main.require
+    (Bool.not (Main.jsonBool (Main.jsonObjectField "isPrerelease" view)))
+    "release is unexpectedly a prerelease"
+  Main.require
+    (Eq.eq
+      (Main.jsonString (Main.jsonObjectField "tagName" latest))
+      Main.fixedTag)
+    "published release is not GitHub latest"
   Main.require (Eq.eq (Main.jsonString (Main.jsonObjectField "tagName" view)) Main.fixedTag) "published release tag differs"
   Main.require (Eq.eq (Main.jsonString (Main.jsonObjectField "name" view)) Main.fixedVersion) "published release title differs"
   Main.require (Eq.eq (Main.jsonString (Main.jsonObjectField "targetCommitish" view)) expectedCommit) "published release target differs"
+  expectedBody <-
+    Text.readFile (Main.joinPath publishedSource "release/notes-1.0.0.md")
+  let actualBody =
+        Text.replace
+          "\r\n"
+          "\n"
+          (Main.jsonString (Main.jsonObjectField "body" view))
+  Main.require (Eq.eq actualBody expectedBody) "published release body differs"
   Main.run ghTool ["release", "download", Main.fixedTag, "--repo", Main.fixedRepository, "--dir", directory]
   Main.exactFiles directory
     [Main.armArchive, Main.armSpdx, Main.x86Archive, Main.x86Spdx, "release.json", "SHA256SUMS"]
@@ -436,27 +528,57 @@ verifyPublished = \directory -> do
         ])
       "release manifest digest/size differs from downloaded bytes"
   Main.run checkJsonschemaTool
-    ["--schemafile", "release/release-manifest.schema.json", Main.joinPath directory "release.json"]
+    [ "--schemafile",
+      Main.joinPath publishedSource "release/release-manifest.schema.json",
+      Main.joinPath directory "release.json"
+    ]
   Monad.forM_ [Main.armSpdx, Main.x86Spdx] \name -> do
     Main.run checkJsonschemaTool
-      ["--schemafile", "release/spdx-2.3.schema.json", Main.joinPath directory name]
+      [ "--schemafile",
+        Main.joinPath publishedSource "release/spdx-2.3.schema.json",
+        Main.joinPath directory name
+      ]
     Main.run pyspdxtoolsTool
       ["--infile", Main.joinPath directory name, "--version", "SPDX-2.3"]
-  Main.run ghTool ["release", "verify", Main.fixedTag, "--repo", Main.fixedRepository]
+  if releaseAttestationRequired
+    then Main.run ghTool
+      ["release", "verify", Main.fixedTag, "--repo", Main.fixedRepository]
+    else
+      Main.require
+        (List.and
+          [ Eq.eq Main.fixedTag "1.0.0_hell-2026-05-29",
+            Eq.eq immutability "legacy-mutable",
+            Bool.not actualImmutable
+          ])
+        "release attestation may be omitted only for the fixed legacy release"
+  let signerWorkflow =
+        "Portfoligno/hell-application-image-compilation/.github/workflows/release.yml"
+  let sourceRef = "refs/tags/1.0.0_hell-2026-05-29"
+  Main.require artifactAttestationsRequired
+    "artifact attestations are required for every published release"
   Monad.forM_ [Main.armArchive, Main.x86Archive, "SHA256SUMS"] \name ->
     Main.run ghTool
       ["attestation", "verify", Main.joinPath directory name,
        "--repo", Main.fixedRepository,
+       "--signer-workflow", signerWorkflow,
+       "--source-ref", sourceRef,
+       "--source-digest", expectedCommit,
        "--predicate-type", "https://slsa.dev/provenance/v1",
        "--deny-self-hosted-runners"]
   Main.run ghTool
     ["attestation", "verify", Main.joinPath directory Main.armArchive,
      "--repo", Main.fixedRepository,
+     "--signer-workflow", signerWorkflow,
+     "--source-ref", sourceRef,
+     "--source-digest", expectedCommit,
      "--predicate-type", "https://spdx.dev/Document/v2.3",
      "--deny-self-hosted-runners"]
   Main.run ghTool
     ["attestation", "verify", Main.joinPath directory Main.x86Archive,
      "--repo", Main.fixedRepository,
+     "--signer-workflow", signerWorkflow,
+     "--source-ref", sourceRef,
+     "--source-digest", expectedCommit,
      "--predicate-type", "https://spdx.dev/Document/v2.3",
      "--deny-self-hosted-runners"]
   architecture <- Main.env "HELL_TARGET_ARCH"
@@ -494,8 +616,13 @@ main = do
       Main.stageDraft (Main.argument 1 arguments)
   else if Eq.eq command "verify-published"
     then do
-      Main.require (Eq.eq count 2) "verify-published requires directory"
-      Main.verifyPublished (Main.argument 1 arguments)
+      Main.require (List.elem count [2,3])
+        "verify-published requires an asset directory and optional published source"
+      publishedSource <-
+        if Eq.eq count 3
+          then IO.pure (Main.argument 2 arguments)
+          else IO.pure "."
+      Main.verifyPublished (Main.argument 1 arguments) publishedSource
   else if Eq.eq command "test-runtime-delegation"
     then do
       enabled <- Main.envDefault "HELL_AUTOMATION_TEST_DELEGATION" ""

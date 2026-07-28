@@ -1,5 +1,5 @@
 name: Setup exact Hell
-description: Install the immutable Application Image Compilation 1.0.0 release
+description: Install the reviewed Application Image Compilation 1.0.0 release
 
 outputs:
   hell-path:
@@ -12,7 +12,7 @@ outputs:
     description: Whether the exact verified archive was restored
     value: ${{ steps.publish.outputs.cache-hit }}
   archive-sha256:
-    description: Reviewed SHA-256 of the immutable architecture archive
+    description: Reviewed SHA-256 of the exact architecture archive
     value: ${{ steps.publish.outputs.archive-sha256 }}
   build-identity:
     description: Exact architecture-specific Hell build identity

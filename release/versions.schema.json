@@ -31,6 +31,7 @@
         ,
         "title",
         "notes",
+        "publication",
         "assets",
         "targets"
       ],
@@ -59,6 +60,27 @@
         },
         "notes": {
           "const": "release/notes-1.0.0.md"
+        },
+        "publication": {
+          "description": "Explicit exception for the already-published legacy release. Future release identities must replace this with an immutable policy and require the GitHub release attestation.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "immutability",
+            "releaseAttestationRequired",
+            "artifactAttestationsRequired"
+          ],
+          "properties": {
+            "immutability": {
+              "const": "legacy-mutable"
+            },
+            "releaseAttestationRequired": {
+              "const": false
+            },
+            "artifactAttestationsRequired": {
+              "const": true
+            }
+          }
         },
         "assets": {
           "const": [

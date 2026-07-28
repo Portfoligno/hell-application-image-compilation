@@ -10,6 +10,11 @@
     "artifactStem": "hell-application-image-compilation-1.0.0-hell-2026-05-29",
     "title": "Hell 2026-05-29 — Application Image Compilation 1.0.0",
     "notes": "release/notes-1.0.0.md",
+    "publication": {
+      "immutability": "legacy-mutable",
+      "releaseAttestationRequired": false,
+      "artifactAttestationsRequired": true
+    },
     "assets": [
       "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.tar.xz",
       "hell-application-image-compilation-1.0.0-hell-2026-05-29-x86_64-linux-static.spdx.json",

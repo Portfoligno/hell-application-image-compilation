@@ -139,10 +139,27 @@
             ];
           };
 
+        hellAutomationChecksSource =
+          pkgs.replaceVars ./automation/hell-automation-checks.hell {
+            cabal = pkgs.lib.getExe' pkgs.cabal-install "cabal";
+            ghc = pkgs.lib.getExe' sdistCompiler "ghc";
+            pandoc = pkgs.lib.getExe pkgs.pandoc;
+          };
         hellAutomationChecks =
           mkHellImage
             "hell-automation-checks"
-            ./automation/hell-automation-checks.hell;
+            hellAutomationChecksSource;
+        documentationToolContract =
+          builtins.derivation {
+            inherit system;
+            name = "hell-documentation-tool-contract-${system}";
+            allowSubstitutes = false;
+            preferLocalBuild = true;
+            builder = hellAutomationChecks;
+            args = [ "documentation-tool-contract" ];
+            SOURCE_ROOT = ./.;
+            PATH = "";
+          };
         hellAutomationReleaseBuildSource =
           pkgs.replaceVars ./automation/hell-automation-release-build.hell {
             checkJsonschema = pkgs.lib.getExe pkgs.check-jsonschema;
@@ -320,6 +337,7 @@
           } // pkgs.lib.optionalAttrs (mode == "check-docs") {
             HELL_TOOL_CABAL = pkgs.lib.getExe' pkgs.cabal-install "cabal";
             HELL_TOOL_GHC = pkgs.lib.getExe' sdistCompiler "ghc";
+            HELL_TOOL_PANDOC = pkgs.lib.getExe pkgs.pandoc;
           } // pkgs.lib.optionalAttrs (mode == "check-sdist") {
             HOME = "/homeless-shelter";
             HELL_TOOL_CABAL = pkgs.lib.getExe' pkgs.cabal-install "cabal";
@@ -415,10 +433,10 @@
             mkAutomationCheck "metadata" "metadata" hellAutomationChecks;
           release-build-validator-contract = releaseBuildValidatorContract;
           release-control-validator-contract = releaseControlValidatorContract;
+          documentation-tool-contract = documentationToolContract;
           hpack-drift =
             mkAutomationCheck "hpack-drift" "hpack-drift" hellAutomationChecks;
-          documentation =
-            mkAutomationCheck "documentation" "check-docs" hellAutomationChecks;
+          documentation = documentationToolContract;
           source-distribution =
             mkAutomationCheck "source-distribution" "check-sdist" hellAutomationChecks;
           release-static-native = releaseStaticNative;

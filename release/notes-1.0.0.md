@@ -35,10 +35,16 @@ Verify downloaded assets with:
 
 ```text
 sha256sum --check SHA256SUMS
-gh attestation verify <archive> -R Portfoligno/hell-application-image-compilation
-gh release verify 1.0.0_hell-2026-05-29 \
-  -R Portfoligno/hell-application-image-compilation
+gh attestation verify <archive> --repo Portfoligno/hell-application-image-compilation --signer-workflow Portfoligno/hell-application-image-compilation/.github/workflows/release.yml --source-ref refs/tags/1.0.0_hell-2026-05-29 --source-digest 5ee559baf092018ee487fadb194a58f5523268f3 --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
 ```
+
+This already-published release is the repository's explicit legacy mutable
+exception. It has GitHub artifact provenance and SPDX attestations, but GitHub
+cannot retroactively add the immutable-release attestation used by
+`gh release verify`. Repository owners must enable immutable releases before
+any future publication; all future releases require that additional check.
+The current `Verify published release` workflow can be dispatched from the
+default branch to apply the latest read-only verifier to this exact tag.
 
 Original Hell is Copyright (c) 2023 Chris Done and is distributed under the
 BSD-3-Clause license.

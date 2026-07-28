@@ -82,6 +82,9 @@ memberNames = \value ->
 
 normalizedCacheHit = \value -> if Eq.eq value "true" then "true" else "false"
 
+releaseAttestationRequired = \tag ->
+  Bool.not (Eq.eq tag "1.0.0_hell-2026-05-29")
+
 main = do
   runnerArch <- Main.environment "HELL_SETUP_RUNNER_ARCH"
   binary <- Main.environment "HELL_SETUP_BINARY"
@@ -225,8 +228,18 @@ main = do
     $ Json.decode $ Text.encodeUtf8 buildInfoOutput
   Main.require (Eq.eq (Json.encode buildInfo) (Json.encode expectedBuildInfo)) "complete build-info mismatch"
 
-  Process.runProcess_ $ Process.proc "gh" ["release", "verify", tag, "--repo", repository]
-  Process.runProcess_ $ Process.proc "gh" ["release", "verify-asset", tag, archive, "--repo", repository]
+  if Main.releaseAttestationRequired tag
+    then do
+      Process.runProcess_ $
+        Process.proc "gh" ["release", "verify", tag, "--repo", repository]
+      Process.runProcess_ $
+        Process.proc
+          "gh"
+          ["release", "verify-asset", tag, archive, "--repo", repository]
+    else
+      Main.require
+        (Eq.eq tag "1.0.0_hell-2026-05-29")
+        "release attestation may be omitted only for the fixed legacy release"
   provenanceValue <- Main.field "provenance" trustFields
   provenanceFields <- Main.object provenanceValue
   sourceRef <- Main.stringField "sourceRef" provenanceFields

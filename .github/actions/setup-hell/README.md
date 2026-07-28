@@ -37,7 +37,7 @@ identity is accepted.
 7. Require the read-only published-release verifier to pass before advertising
    this action. Consumers pin the full commit containing the trust files.
 
-The action revalidates cache hits. It caches only the immutable archive,
+The action revalidates cache hits. It caches only the exact reviewed archive,
 extracts only the reviewed `hell` member before executing it, verifies the
 archive and member digests, installs mode `0755`, and delegates all subsequent
 validation and output publication to Hell programs.
